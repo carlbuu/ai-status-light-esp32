@@ -4,6 +4,7 @@ $projectDir = Split-Path -Parent $PSScriptRoot
 $sourceFile = Join-Path $PSScriptRoot 'CodexStatusBridge.cs'
 $uiFile = Join-Path $PSScriptRoot 'StatusForm.cs'
 $integrationFile = Join-Path $PSScriptRoot 'IntegrationManager.cs'
+$iconFile = Join-Path $projectDir 'assets\app-icon.ico'
 $publishDir = Join-Path $PSScriptRoot 'publish'
 $outputFile = Join-Path $publishDir 'CodexStatusBridge.exe'
 $oneClickFile = Join-Path $projectDir 'CodexStatusLight-OneClick.exe'
@@ -16,10 +17,14 @@ if (-not (Test-Path -LiteralPath $compiler)) {
 if (-not (Test-Path -LiteralPath $compiler)) {
     throw 'Windows .NET Framework C# compiler was not found.'
 }
+if (-not (Test-Path -LiteralPath $iconFile)) {
+    throw "Application icon was not found: $iconFile"
+}
 
 New-Item -ItemType Directory -Force -Path $publishDir | Out-Null
 
 & $compiler /nologo /optimize+ /target:winexe /platform:anycpu `
+    /win32icon:$iconFile `
     /reference:System.dll `
     /reference:System.Core.dll `
     /reference:System.Drawing.dll `

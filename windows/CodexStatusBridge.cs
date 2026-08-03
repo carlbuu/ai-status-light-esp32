@@ -402,6 +402,26 @@ namespace CodexStatusLight
         }
     }
 
+    internal static class AppIcon
+    {
+        private static Icon current;
+
+        internal static Icon Current
+        {
+            get
+            {
+                if (current != null) return current;
+                try
+                {
+                    current = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+                }
+                catch { }
+                if (current == null) current = SystemIcons.Application;
+                return current;
+            }
+        }
+    }
+
     internal static class Program
     {
         internal const int IpcPort = 38451;
@@ -1156,7 +1176,7 @@ namespace CodexStatusLight
 
             notifyIcon = new NotifyIcon
             {
-                Icon = SystemIcons.Application,
+                Icon = AppIcon.Current,
                 Text = "AI 指示灯：正在启动",
                 ContextMenuStrip = menu,
                 Visible = true
@@ -1730,7 +1750,7 @@ namespace CodexStatusLight
                     nextPingUtc = DateTime.MinValue;
                     SendBrightnessNoThrow();
                     SendStateNoThrow(CalculateEffectiveStatus());
-                    UpdateTray("AI 指示灯：已连接 " + portName, SystemIcons.Application);
+                    UpdateTray("AI 指示灯：已连接 " + portName, AppIcon.Current);
                     Log.Write("Connected to " + portName);
                     return;
                 }
@@ -1802,7 +1822,7 @@ namespace CodexStatusLight
                     ? " / " + activeTaskCount + " 个任务"
                     : (state == LightState.Review ? " / " + pendingReviewCount + " 个待检查" : "");
                 UpdateTray("AI 指示灯：" + state + taskText + " / " + connectedPort,
-                    SystemIcons.Application);
+                    AppIcon.Current);
             }
             catch (Exception ex)
             {

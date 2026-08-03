@@ -67,7 +67,7 @@ namespace CodexStatusLight
             Size = new Size(820, 820);
             BackColor = Background;
             Font = new Font("Microsoft YaHei UI", 9F);
-            Icon = SystemIcons.Application;
+            Icon = AppIcon.Current;
             AutoScaleMode = AutoScaleMode.Dpi;
             DoubleBuffered = true;
 
