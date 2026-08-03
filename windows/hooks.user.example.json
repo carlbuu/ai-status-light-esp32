@@ -1,0 +1,8 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "\"C:\\Users\\16252\\Desktop\\gpt project\\sketch_jul16a\\windows\\publish\\CodexStatusBridge.exe\" hook WORKING", "commandWindows": "\"C:\\Users\\16252\\Desktop\\gpt project\\sketch_jul16a\\windows\\publish\\CodexStatusBridge.exe\" hook WORKING", "timeout": 3}]}],
+    "PermissionRequest": [{"hooks": [{"type": "command", "command": "\"C:\\Users\\16252\\Desktop\\gpt project\\sketch_jul16a\\windows\\publish\\CodexStatusBridge.exe\" hook WAITING", "commandWindows": "\"C:\\Users\\16252\\Desktop\\gpt project\\sketch_jul16a\\windows\\publish\\CodexStatusBridge.exe\" hook WAITING", "timeout": 3}]}],
+    "PostToolUse": [{"hooks": [{"type": "command", "command": "\"C:\\Users\\16252\\Desktop\\gpt project\\sketch_jul16a\\windows\\publish\\CodexStatusBridge.exe\" hook WORKING", "commandWindows": "\"C:\\Users\\16252\\Desktop\\gpt project\\sketch_jul16a\\windows\\publish\\CodexStatusBridge.exe\" hook WORKING", "timeout": 3}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "\"C:\\Users\\16252\\Desktop\\gpt project\\sketch_jul16a\\windows\\publish\\CodexStatusBridge.exe\" hook IDLE", "commandWindows": "\"C:\\Users\\16252\\Desktop\\gpt project\\sketch_jul16a\\windows\\publish\\CodexStatusBridge.exe\" hook IDLE", "timeout": 3}]}]
+  }
+}
