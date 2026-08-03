@@ -87,6 +87,7 @@ namespace CodexStatusLight
         public bool DisplayEnabled;
         public int BrightnessPercent;
         public bool BrightnessSupported;
+        public bool TaskCountBlinkEnabled;
         public string StatusText;
     }
 
@@ -495,6 +496,11 @@ namespace CodexStatusLight
         private static int SendCursorHook(bool requestPermission)
         {
             HookPayload payload = ReadHookPayload(IntegrationManager.CursorPlatform);
+            if (!IsUsableCursorHookPayload(payload))
+            {
+                Log.Write("Cursor hook ignored because its event or session id is missing.");
+                return 0;
+            }
             HookMessage message = CreateCursorHookMessage(payload, requestPermission);
             EnsureBridgeRunning();
             SendMessage(message);
@@ -519,7 +525,7 @@ namespace CodexStatusLight
             {
                 Log.Write(source + " hook input parse warning: " + ex.Message);
             }
-            return new HookPayload();
+            return null;
         }
 
         internal static HookPayload DeserializeCursorHookPayload(byte[] inputBytes)
@@ -544,8 +550,88 @@ namespace CodexStatusLight
             input = input.TrimStart('\uFEFF', '\u200B', '\0', ' ', '\t', '\r', '\n');
             if (string.IsNullOrWhiteSpace(input))
                 return new HookPayload();
-            return new JavaScriptSerializer().Deserialize<HookPayload>(input) ??
-                new HookPayload();
+            try
+            {
+                return new JavaScriptSerializer().Deserialize<HookPayload>(input) ??
+                    new HookPayload();
+            }
+            catch (Exception)
+            {
+                HookPayload recovered = RecoverCursorHookMetadata(input);
+                if (IsUsableCursorHookPayload(recovered))
+                {
+                    Log.Write("Recovered Cursor hook metadata from malformed JSON input.");
+                    return recovered;
+                }
+                throw;
+            }
+        }
+
+        internal static bool IsUsableCursorHookPayload(HookPayload payload)
+        {
+            return payload != null &&
+                !string.IsNullOrWhiteSpace(payload.hook_event_name) &&
+                (!string.IsNullOrWhiteSpace(payload.conversation_id) ||
+                    !string.IsNullOrWhiteSpace(payload.session_id));
+        }
+
+        private static HookPayload RecoverCursorHookMetadata(string input)
+        {
+            return new HookPayload
+            {
+                conversation_id = ExtractJsonString(input, "conversation_id"),
+                session_id = ExtractJsonString(input, "session_id"),
+                generation_id = ExtractJsonString(input, "generation_id"),
+                turn_id = ExtractJsonString(input, "turn_id"),
+                hook_event_name = ExtractJsonString(input, "hook_event_name"),
+                status = ExtractJsonString(input, "status"),
+                reason = ExtractJsonString(input, "reason")
+            };
+        }
+
+        private static string ExtractJsonString(string input, string property)
+        {
+            if (string.IsNullOrEmpty(input)) return null;
+            string marker = "\"" + property + "\"";
+            int markerIndex = input.LastIndexOf(marker, StringComparison.Ordinal);
+            if (markerIndex < 0) return null;
+            int colonIndex = input.IndexOf(':', markerIndex + marker.Length);
+            if (colonIndex < 0) return null;
+            int valueStart = colonIndex + 1;
+            while (valueStart < input.Length && char.IsWhiteSpace(input[valueStart])) ++valueStart;
+            if (valueStart >= input.Length || input[valueStart] != '"') return null;
+
+            var value = new StringBuilder();
+            bool escaped = false;
+            for (int i = valueStart + 1; i < input.Length; ++i)
+            {
+                char current = input[i];
+                if (escaped)
+                {
+                    if (current == '"' || current == '\\' || current == '/')
+                        value.Append(current);
+                    else if (current == 'b') value.Append('\b');
+                    else if (current == 'f') value.Append('\f');
+                    else if (current == 'n') value.Append('\n');
+                    else if (current == 'r') value.Append('\r');
+                    else if (current == 't') value.Append('\t');
+                    else return null;
+                    escaped = false;
+                }
+                else if (current == '\\')
+                {
+                    escaped = true;
+                }
+                else if (current == '"')
+                {
+                    return value.ToString();
+                }
+                else
+                {
+                    value.Append(current);
+                }
+            }
+            return null;
         }
 
         internal static HookMessage CreateCursorHookMessage(
@@ -787,15 +873,16 @@ namespace CodexStatusLight
                 if (BridgeApplicationContext.CalculateOverallState(turns) != LightState.Idle)
                     throw new InvalidOperationException("Idle aggregation failed.");
 
-                if (BridgeApplicationContext.DeviceCommandFor(LightState.Working, 1, true) != "THINKING" ||
-                    BridgeApplicationContext.DeviceCommandFor(LightState.Working, 2, true) != "WORKING2" ||
-                    BridgeApplicationContext.DeviceCommandFor(LightState.Working, 3, true) != "WORKING3" ||
-                    BridgeApplicationContext.DeviceCommandFor(LightState.Working, 8, true) != "WORKING3" ||
-                    BridgeApplicationContext.DeviceCommandFor(LightState.Waiting, 3, true) != "PERMISSION" ||
-                    BridgeApplicationContext.DeviceCommandFor(LightState.Review, 0, true) != "COMPLETE" ||
-                    BridgeApplicationContext.DeviceCommandFor(LightState.Idle, 0, true) != "OFF" ||
-                    BridgeApplicationContext.DeviceCommandFor(LightState.Error, 0, true) != "ERROR" ||
-                    BridgeApplicationContext.DeviceCommandFor(LightState.Working, 2, false) != "OFF")
+                if (BridgeApplicationContext.DeviceCommandFor(LightState.Working, 1, false, true) != "THINKING" ||
+                    BridgeApplicationContext.DeviceCommandFor(LightState.Working, 2, false, true) != "THINKING" ||
+                    BridgeApplicationContext.DeviceCommandFor(LightState.Working, 2, true, true) != "WORKING2" ||
+                    BridgeApplicationContext.DeviceCommandFor(LightState.Working, 3, true, true) != "WORKING3" ||
+                    BridgeApplicationContext.DeviceCommandFor(LightState.Working, 8, true, true) != "WORKING3" ||
+                    BridgeApplicationContext.DeviceCommandFor(LightState.Waiting, 3, false, true) != "PERMISSION" ||
+                    BridgeApplicationContext.DeviceCommandFor(LightState.Review, 0, false, true) != "COMPLETE" ||
+                    BridgeApplicationContext.DeviceCommandFor(LightState.Idle, 0, false, true) != "OFF" ||
+                    BridgeApplicationContext.DeviceCommandFor(LightState.Error, 0, false, true) != "ERROR" ||
+                    BridgeApplicationContext.DeviceCommandFor(LightState.Working, 2, true, false) != "OFF")
                     throw new InvalidOperationException("Device command mapping failed.");
                 if (IntegrationManager.NormalizeBrightness(65) != 65 ||
                     IntegrationManager.NormalizeBrightness(4) != IntegrationManager.DefaultBrightness ||
@@ -850,8 +937,22 @@ namespace CodexStatusLight
                 HookPayload cursorPipePayload = DeserializeCursorHookPayload(cursorPipeBytes);
                 if (cursorPipePayload.conversation_id != "光标会话" ||
                     cursorPipePayload.generation_id != "并行任务" ||
-                    cursorPipePayload.hook_event_name != "beforeSubmitPrompt")
+                    cursorPipePayload.hook_event_name != "beforeSubmitPrompt" ||
+                    !IsUsableCursorHookPayload(cursorPipePayload))
                     throw new InvalidOperationException("Cursor Windows UTF-8 pipe parsing failed.");
+
+                string malformedCursorJson =
+                    "{\"conversation_id\":\"recovered-session\"," +
+                    "\"generation_id\":\"recovered-turn\",\"prompt\":\"损坏," +
+                    "\"hook_event_name\":\"beforeSubmitPrompt\"}";
+                HookPayload recoveredCursorPayload = DeserializeCursorHookPayload(
+                    Encoding.UTF8.GetBytes(malformedCursorJson));
+                if (recoveredCursorPayload.conversation_id != "recovered-session" ||
+                    recoveredCursorPayload.generation_id != "recovered-turn" ||
+                    recoveredCursorPayload.hook_event_name != "beforeSubmitPrompt" ||
+                    !IsUsableCursorHookPayload(recoveredCursorPayload) ||
+                    IsUsableCursorHookPayload(new HookPayload()))
+                    throw new InvalidOperationException("Malformed Cursor hook recovery failed.");
 
                 string integrationTestDir = Path.Combine(
                     Path.GetDirectoryName(outputPath),
@@ -869,7 +970,8 @@ namespace CodexStatusLight
                         "{\"version\":1,\"hooks\":{\"stop\":[{\"command\":\"other-cursor-tool.exe\"}]}}",
                         Encoding.UTF8);
                     File.WriteAllText(settings,
-                        "{\"Platform\":\"Codex\",\"Brightness\":65}", Encoding.UTF8);
+                        "{\"Platform\":\"Codex\",\"Brightness\":65," +
+                        "\"TaskCountBlinkEnabled\":true}", Encoding.UTF8);
 
                     IntegrationManager.ConfigureFiles(
                         IntegrationManager.CursorPlatform,
@@ -890,7 +992,8 @@ namespace CodexStatusLight
                         cursorText.IndexOf("cursor-permission-hook", StringComparison.OrdinalIgnoreCase) < 0 ||
                         cursorText.IndexOf("[Console]::Out.Write", StringComparison.Ordinal) < 0 ||
                         cursorText.IndexOf("WebSearch|WebFetch", StringComparison.Ordinal) < 0 ||
-                        configuredSettings == null || configuredSettings.Brightness != 65)
+                        configuredSettings == null || configuredSettings.Brightness != 65 ||
+                        !configuredSettings.TaskCountBlinkEnabled)
                         throw new InvalidOperationException("Cursor hook configuration failed.");
 
                     IntegrationManager.ConfigureFiles(
@@ -1005,6 +1108,7 @@ namespace CodexStatusLight
         private DateTime nextSessionPollUtc = DateTime.MinValue;
         private DateTime nextReviewPollUtc = DateTime.MinValue;
         private DateTime nextReviewErrorLogUtc = DateTime.MinValue;
+        private DateTime recentCursorCompletionUntilUtc = DateTime.MinValue;
         private string connectedPort;
         private string preferredPort = "AUTO";
         private string firmwareVersion = "-";
@@ -1014,6 +1118,7 @@ namespace CodexStatusLight
         private bool connectionEnabled = true;
         private bool displayEnabled = true;
         private int brightnessPercent = IntegrationManager.DefaultBrightness;
+        private bool taskCountBlinkEnabled;
         private ToolStripMenuItem displayMenuItem;
         private readonly StatusForm statusForm;
         private string statusText = "正在启动并扫描串口";
@@ -1032,6 +1137,7 @@ namespace CodexStatusLight
         {
             selectedPlatform = IntegrationManager.GetSelectedPlatform();
             brightnessPercent = IntegrationManager.GetBrightness();
+            taskCountBlinkEnabled = IntegrationManager.GetTaskCountBlinkEnabled();
             integrationConfigured = IntegrationManager.IsConfigured(selectedPlatform);
             if (string.Equals(selectedPlatform, IntegrationManager.CodexPlatform,
                 StringComparison.OrdinalIgnoreCase))
@@ -1156,6 +1262,9 @@ namespace CodexStatusLight
                 else if (string.Equals(message.State, "IDLE", StringComparison.OrdinalIgnoreCase))
                 {
                     turns.Remove(key);
+                    if (string.Equals(source, IntegrationManager.CursorPlatform,
+                        StringComparison.OrdinalIgnoreCase))
+                        recentCursorCompletionUntilUtc = DateTime.UtcNow.AddSeconds(3);
                 }
                 else
                 {
@@ -1261,7 +1370,8 @@ namespace CodexStatusLight
                 result.State = LightState.Working;
             else if (hookErrors + sessionErrors > 0)
                 result.State = LightState.Error;
-            else if (CurrentPendingReviewCount() > 0)
+            else if (CurrentPendingReviewCount() > 0 ||
+                recentCursorCompletionUntilUtc > DateTime.UtcNow)
                 result.State = LightState.Review;
             else
                 result.State = LightState.Idle;
@@ -1294,7 +1404,12 @@ namespace CodexStatusLight
                         IntegrationManager.CodexPlatform,
                         StringComparison.OrdinalIgnoreCase);
                     bool sessionStateExpired = monitorCodex && RemoveStaleSessionStates();
-                    bool logicalInputChanged = sessionStateExpired;
+                    bool cursorCompletionExpired =
+                        recentCursorCompletionUntilUtc != DateTime.MinValue &&
+                        DateTime.UtcNow >= recentCursorCompletionUntilUtc;
+                    if (cursorCompletionExpired)
+                        recentCursorCompletionUntilUtc = DateTime.MinValue;
+                    bool logicalInputChanged = sessionStateExpired || cursorCompletionExpired;
                     if (monitorCodex && DateTime.UtcNow >= nextSessionPollUtc)
                     {
                         nextSessionPollUtc = DateTime.UtcNow.AddSeconds(1);
@@ -1636,11 +1751,13 @@ namespace CodexStatusLight
         internal static string DeviceCommandFor(
             LightState state,
             int activeTaskCount,
+            bool taskCountBlinkEnabled,
             bool displayEnabled)
         {
             if (!displayEnabled) return "OFF";
             if (state == LightState.Working)
             {
+                if (!taskCountBlinkEnabled) return "THINKING";
                 if (activeTaskCount >= 3) return "WORKING3";
                 if (activeTaskCount == 2) return "WORKING2";
                 return "THINKING";
@@ -1665,7 +1782,11 @@ namespace CodexStatusLight
             lastLogicalState = state;
             lastActiveTaskCount = activeTaskCount;
             lastPendingReviewCount = pendingReviewCount;
-            string deviceCommand = DeviceCommandFor(state, activeTaskCount, displayEnabled);
+            string deviceCommand = DeviceCommandFor(
+                state,
+                activeTaskCount,
+                taskCountBlinkEnabled,
+                displayEnabled);
             if (firmwareVersion != "3" && firmwareVersion != "4" &&
                 (deviceCommand == "WORKING2" || deviceCommand == "WORKING3"))
                 deviceCommand = "THINKING";
@@ -1749,6 +1870,7 @@ namespace CodexStatusLight
                 DisplayEnabled = displayEnabled,
                 BrightnessPercent = IntegrationManager.NormalizeBrightness(brightnessPercent),
                 BrightnessSupported = firmwareVersion == "4",
+                TaskCountBlinkEnabled = taskCountBlinkEnabled,
                 StatusText = statusText
             };
         }
@@ -1791,6 +1913,17 @@ namespace CodexStatusLight
                 brightnessPercent = IntegrationManager.NormalizeBrightness(brightness);
                 IntegrationManager.SetBrightness(brightnessPercent);
                 SendBrightnessNoThrow();
+            }
+        }
+
+        internal void SetTaskCountBlinkFromUi(bool enabled)
+        {
+            lock (sync)
+            {
+                taskCountBlinkEnabled = enabled;
+                IntegrationManager.SetTaskCountBlinkEnabled(enabled);
+                SendStateNoThrow(CalculateEffectiveStatus());
+                Log.Write("Task count blink " + (enabled ? "enabled" : "disabled") + ".");
             }
         }
 
@@ -1844,6 +1977,7 @@ namespace CodexStatusLight
                 sessionUpdatedUtc.Clear();
                 sessionOffsets.Clear();
                 reviewIds.Clear();
+                recentCursorCompletionUntilUtc = DateTime.MinValue;
                 if (string.Equals(selectedPlatform, IntegrationManager.CodexPlatform,
                     StringComparison.OrdinalIgnoreCase))
                     InitializeSessionOffsets();

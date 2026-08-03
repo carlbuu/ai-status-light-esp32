@@ -1,0 +1,19 @@
+# Generated distribution files
+/CodexStatusLight-OneClick.exe
+/CodexStatusLight-portable.zip
+/windows/publish/
+
+# Local IDE files
+/.vs/
+/.idea/
+*.user
+*.suo
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Temporary files
+*.tmp
+*~
