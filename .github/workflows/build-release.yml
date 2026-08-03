@@ -1,0 +1,59 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Build Windows packages
+        shell: powershell
+        run: .\windows\build.ps1
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: AI-Status-Light-${{ github.sha }}
+          path: |
+            CodexStatusLight-OneClick.exe
+            CodexStatusLight-portable.zip
+
+      - name: Publish release files
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+
+          gh release view $tag *> $null
+
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag `
+              "CodexStatusLight-OneClick.exe" `
+              "CodexStatusLight-portable.zip" `
+              --clobber
+          }
+          else {
+            gh release create $tag `
+              "CodexStatusLight-OneClick.exe" `
+              "CodexStatusLight-portable.zip" `
+              --title "AI Status Light $tag" `
+              --generate-notes
+          }
