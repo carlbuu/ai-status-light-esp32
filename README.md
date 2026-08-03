@@ -8,7 +8,7 @@
 2. 关闭 Arduino IDE 的串口监视器。
 3. 双击 `CodexStatusLight-OneClick.exe`。
 4. 在“选择 AI 平台”中选 **Codex** 或 **Cursor**。
-5. 根据需要勾选“开机自动启动”，然后点击“应用并配置”。
+5. 根据需要勾选“按运行任务数量闪烁黄灯”和“开机自动启动”，然后点击“应用并配置”。
 6. 完全退出并重新打开刚刚选择的平台。
 7. 在“灯光测试”区域拖动“亮度”滑块，可在 5%～100% 之间实时调节并自动保存。
 
@@ -18,9 +18,10 @@
 
 | 状态 | LED |
 | --- | --- |
-| 1 个任务正在运行 | 黄灯常亮 |
-| 2 个任务正在运行 | 黄灯连续闪 2 次，然后停顿并重复 |
-| 3 个及以上任务正在运行 | 黄灯连续闪 3 次，然后停顿并重复 |
+| 任务正在运行，未开启按数量闪烁 | 黄灯常亮 |
+| 开启按数量闪烁，1 个任务正在运行 | 黄灯常亮 |
+| 开启按数量闪烁，2 个任务正在运行 | 黄灯连续闪 2 次，然后停顿并重复 |
+| 开启按数量闪烁，3 个及以上任务正在运行 | 黄灯连续闪 3 次，然后停顿并重复 |
 | 任一任务等待用户允许 | 绿灯闪烁 |
 | 没有运行任务，但有未点击的完成项目（项目带黄点） | 绿灯常亮 |
 | 完成项目均已点击，且没有运行或待检查项目 | 自动熄灭 |
@@ -47,13 +48,14 @@ GPIO2、GPIO3、GPIO4 分别连接红、黄、绿 LED，均为高电平点亮。
 - 使用 Cursor 官方的会话、提示词、工具、Shell、MCP 和停止事件。
 - 支持按 Cursor 会话和任务标识统计并行任务，完成事件会立即清除对应任务。
 - 为了让“等待允许”与绿色闪烁严格同步，选择 Cursor 后，Shell、MCP、网页搜索和网页读取操作会通过 Hook 返回 `ask`，因此 Cursor 会弹出允许提示；选择回 Codex 后，这些 Hook 会自动移除。
-- Windows 上会按 UTF-8/BOM 安全解析 Cursor Hook 输入，并由 Hook 外层直接返回权限 JSON，避免图形 EXE 丢失标准输出。
+- Windows 上会按 UTF-8/BOM 安全解析 Cursor Hook 输入；遇到损坏的 JSON 时会恢复会话元数据，无法恢复则忽略，避免产生无法结束的虚假任务。Hook 外层直接返回权限 JSON，避免图形 EXE 丢失标准输出。
 - 从 Cursor 的 `composerHeaders.hasUnreadMessages` 读取待检查项目；点击对应项目后自动更新。
+- 如果完成时 Cursor 对话已经打开，绿灯会亮约 3 秒作为完成提示；未读项目仍会让绿灯保持常亮直到查看。
 - Cursor Hooks 官方说明：<https://cursor.com/cn/docs/hooks>
 
 ## 安全切换与卸载
 
-- 当前平台保存在 `%LOCALAPPDATA%\CodexStatusLight\settings.json`。
+- 当前平台、亮度和“按运行任务数量闪烁黄灯”开关保存在 `%LOCALAPPDATA%\CodexStatusLight\settings.json`。
 - 修改现有 Hook 文件前会生成带时间戳的备份。
 - 只删除命令中包含本程序 EXE 的 Hook，其他 Hook 会原样保留。
 - 便携版卸载会同时清理 Codex 和 Cursor 中属于本程序的 Hook。
@@ -87,7 +89,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\build.ps1
 
 - Codex/Cursor 状态事件映射
 - Windows UTF-8/BOM Hook 输入和 Cursor 权限 JSON 输出
-- 多任务数量统计、双闪/三闪映射和状态优先级
+- 多任务数量统计、可选双闪/三闪映射和状态优先级
 - 保留无关 Hook
 - Codex 与 Cursor 双向切换
 - 窗口自适应参数

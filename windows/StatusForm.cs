@@ -31,6 +31,7 @@ namespace CodexStatusLight
         private readonly Button acknowledgeReviewsButton = GhostButton("全部标记已检查");
         private readonly Button installButton = ActionButton("应用并配置", Primary);
         private readonly CheckBox startupCheck = new CheckBox();
+        private readonly CheckBox taskCountBlinkCheck = new CheckBox();
         private readonly RadioButton codexRadio = new RadioButton();
         private readonly RadioButton cursorRadio = new RadioButton();
         private readonly Label platformStatusLabel = new Label();
@@ -48,6 +49,7 @@ namespace CodexStatusLight
         private DateTime nextPortRefresh = DateTime.MinValue;
         private DateTime nextStartupRefresh = DateTime.MinValue;
         private bool updatingStartup;
+        private bool updatingTaskCountBlink;
         private bool compactLayout;
         private float currentScale;
 
@@ -367,6 +369,25 @@ namespace CodexStatusLight
             platformStatusLabel.Margin = new Padding(3, 2, 3, 9);
             settings.Controls.Add(platformStatusLabel);
 
+            taskCountBlinkCheck.Text = "按运行任务数量闪烁黄灯";
+            taskCountBlinkCheck.AutoSize = true;
+            taskCountBlinkCheck.ForeColor = TextMain;
+            taskCountBlinkCheck.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold);
+            taskCountBlinkCheck.Checked = initialSnapshot.TaskCountBlinkEnabled;
+            taskCountBlinkCheck.CheckedChanged += delegate
+            {
+                if (updatingTaskCountBlink) return;
+                bridge.SetTaskCountBlinkFromUi(taskCountBlinkCheck.Checked);
+            };
+            settings.Controls.Add(taskCountBlinkCheck);
+            settings.Controls.Add(new Label
+            {
+                Text = "关闭时黄灯常亮；开启后 2 个任务双闪，3 个及以上三闪",
+                ForeColor = TextMuted,
+                AutoSize = true,
+                Margin = new Padding(3, 1, 3, 9)
+            });
+
             startupCheck.Text = "开机自动启动";
             startupCheck.AutoSize = true;
             startupCheck.ForeColor = TextMain;
@@ -467,6 +488,12 @@ namespace CodexStatusLight
                 ? s.Platform + " 已配置"
                 : s.Platform + " 尚未配置";
             platformStatusLabel.ForeColor = s.IntegrationConfigured ? Success : Warning;
+            if (taskCountBlinkCheck.Checked != s.TaskCountBlinkEnabled)
+            {
+                updatingTaskCountBlink = true;
+                taskCountBlinkCheck.Checked = s.TaskCountBlinkEnabled;
+                updatingTaskCountBlink = false;
+            }
 
             if (DateTime.UtcNow >= nextPortRefresh)
             {
@@ -645,7 +672,9 @@ namespace CodexStatusLight
             if (state == "Working") return "运行中 · " + countText;
             if (state == "Waiting") return "请求权限 · " + countText;
             if (state == "Error") return "报错";
-            if (state == "Review") return "待检查 · " + Math.Max(1, pendingReviewCount) + " 个项目";
+            if (state == "Review") return pendingReviewCount > 0
+                ? "待检查 · " + pendingReviewCount + " 个项目"
+                : "任务已完成";
             return "空闲";
         }
 

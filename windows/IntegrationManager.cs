@@ -11,6 +11,7 @@ namespace CodexStatusLight
     {
         public string Platform { get; set; }
         public int Brightness { get; set; }
+        public bool TaskCountBlinkEnabled { get; set; }
     }
 
     internal static class IntegrationManager
@@ -117,7 +118,22 @@ namespace CodexStatusLight
             SaveSettings(
                 SettingsPath,
                 GetSelectedPlatform(),
-                NormalizeBrightness(brightness));
+                NormalizeBrightness(brightness),
+                GetTaskCountBlinkEnabled());
+        }
+
+        internal static bool GetTaskCountBlinkEnabled()
+        {
+            return GetTaskCountBlinkEnabledFromFile(SettingsPath);
+        }
+
+        internal static void SetTaskCountBlinkEnabled(bool enabled)
+        {
+            SaveSettings(
+                SettingsPath,
+                GetSelectedPlatform(),
+                GetBrightness(),
+                enabled);
         }
 
         internal static bool IsConfigured(string platform)
@@ -176,7 +192,8 @@ namespace CodexStatusLight
             SaveSettings(
                 settingsPath,
                 normalized,
-                GetBrightnessFromFile(settingsPath));
+                GetBrightnessFromFile(settingsPath),
+                GetTaskCountBlinkEnabledFromFile(settingsPath));
         }
 
         internal static void RemoveAllFiles(
@@ -382,14 +399,35 @@ namespace CodexStatusLight
             }
         }
 
-        private static void SaveSettings(string path, string platform, int brightness)
+        private static bool GetTaskCountBlinkEnabledFromFile(string path)
+        {
+            try
+            {
+                if (!File.Exists(path)) return false;
+                IntegrationSettings settings = NewSerializer().Deserialize<IntegrationSettings>(
+                    File.ReadAllText(path, Encoding.UTF8));
+                return settings != null && settings.TaskCountBlinkEnabled;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("Task count blink settings read warning: " + ex.Message);
+                return false;
+            }
+        }
+
+        private static void SaveSettings(
+            string path,
+            string platform,
+            int brightness,
+            bool taskCountBlinkEnabled)
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path));
             WriteAtomic(path, NewSerializer().Serialize(
                 new IntegrationSettings
                 {
                     Platform = NormalizePlatform(platform),
-                    Brightness = NormalizeBrightness(brightness)
+                    Brightness = NormalizeBrightness(brightness),
+                    TaskCountBlinkEnabled = taskCountBlinkEnabled
                 }));
         }
 
