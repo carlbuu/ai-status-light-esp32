@@ -1139,6 +1139,8 @@ namespace CodexStatusLight
         private bool displayEnabled = true;
         private int brightnessPercent = IntegrationManager.DefaultBrightness;
         private bool taskCountBlinkEnabled;
+        private bool systemSuspended;
+        private bool powerEventsSubscribed;
         private ToolStripMenuItem displayMenuItem;
         private readonly StatusForm statusForm;
         private string statusText = "正在启动并扫描串口";
@@ -1190,6 +1192,15 @@ namespace CodexStatusLight
                 listenerThread = new Thread(ListenLoop) { IsBackground = true, Name = "CodexStatusLight IPC" };
                 listenerThread.Start();
                 timer = new System.Threading.Timer(Tick, null, 0, 1000);
+                try
+                {
+                    SystemEvents.PowerModeChanged += OnPowerModeChanged;
+                    powerEventsSubscribed = true;
+                }
+                catch (Exception ex)
+                {
+                    Log.Write("Power event subscription failed: " + ex.Message);
+                }
                 Log.Write("Bridge started.");
             }
             else
@@ -1418,6 +1429,8 @@ namespace CodexStatusLight
             {
                 lock (sync)
                 {
+                    if (systemSuspended)
+                        return;
                     RemoveStaleTurns();
                     bool monitorCodex = string.Equals(
                         selectedPlatform,
@@ -1729,7 +1742,8 @@ namespace CodexStatusLight
                             if (line == "CODEX_STATUS_LIGHT:1" ||
                                 line == "CODEX_STATUS_LIGHT:2" ||
                                 line == "CODEX_STATUS_LIGHT:3" ||
-                                line == "CODEX_STATUS_LIGHT:4")
+                                line == "CODEX_STATUS_LIGHT:4" ||
+                                line == "CODEX_STATUS_LIGHT:5")
                             {
                                 identified = true;
                                 firmwareVersion = line.Substring(line.LastIndexOf(':') + 1);
@@ -1808,6 +1822,7 @@ namespace CodexStatusLight
                 taskCountBlinkEnabled,
                 displayEnabled);
             if (firmwareVersion != "3" && firmwareVersion != "4" &&
+                firmwareVersion != "5" &&
                 (deviceCommand == "WORKING2" || deviceCommand == "WORKING3"))
                 deviceCommand = "THINKING";
             if (changed)
@@ -1889,7 +1904,7 @@ namespace CodexStatusLight
                 IntegrationConfigured = integrationConfigured,
                 DisplayEnabled = displayEnabled,
                 BrightnessPercent = IntegrationManager.NormalizeBrightness(brightnessPercent),
-                BrightnessSupported = firmwareVersion == "4",
+                BrightnessSupported = firmwareVersion == "4" || firmwareVersion == "5",
                 TaskCountBlinkEnabled = taskCountBlinkEnabled,
                 StatusText = statusText
             };
@@ -1947,6 +1962,52 @@ namespace CodexStatusLight
             }
         }
 
+        private void OnPowerModeChanged(object sender, PowerModeChangedEventArgs e)
+        {
+            if (stopping)
+                return;
+
+            if (e.Mode == PowerModes.Suspend)
+            {
+                lock (sync)
+                {
+                    if (stopping)
+                        return;
+                    systemSuspended = true;
+                    Log.Write("System suspend detected.");
+                    if (serial == null || !serial.IsOpen || firmwareVersion != "5")
+                        return;
+                    try
+                    {
+                        serial.WriteLine("SUSPEND");
+                    }
+                    catch (Exception ex)
+                    {
+                        // Avoid a potentially slow driver close while Windows is
+                        // entering sleep. Resume handling will retry or reconnect.
+                        Log.Write("Serial suspend command failed: " + ex.Message);
+                    }
+                }
+                return;
+            }
+
+            if (e.Mode == PowerModes.Resume)
+            {
+                lock (sync)
+                {
+                    if (stopping)
+                        return;
+                    systemSuspended = false;
+                    Log.Write("System resume detected.");
+                    nextPingUtc = DateTime.MinValue;
+                    if (serial != null && serial.IsOpen)
+                        SendStateNoThrow(CalculateEffectiveStatus());
+                    else
+                        nextScanUtc = DateTime.MinValue;
+                }
+            }
+        }
+
         internal void MarkAllReviewsCheckedFromUi()
         {
             lock (sync)
@@ -1961,7 +2022,8 @@ namespace CodexStatusLight
 
         private void SendBrightnessNoThrow()
         {
-            if (serial == null || !serial.IsOpen || firmwareVersion != "4") return;
+            if (serial == null || !serial.IsOpen ||
+                (firmwareVersion != "4" && firmwareVersion != "5")) return;
             try
             {
                 serial.WriteLine("BRIGHTNESS " + brightnessPercent);
@@ -2083,6 +2145,12 @@ namespace CodexStatusLight
 
             stopping = true;
             Log.Write("Bridge exit requested.");
+
+            if (powerEventsSubscribed)
+            {
+                try { SystemEvents.PowerModeChanged -= OnPowerModeChanged; } catch { }
+                powerEventsSubscribed = false;
+            }
 
             // Never wait for the serial scan lock on the UI thread. Some USB serial
             // drivers can block Close/Dispose for several seconds; the operating

@@ -4,7 +4,7 @@
 
 ## 最简单的使用方法
 
-1. 给 ESP32-C3 烧录 `sketch_jul16a.ino`，并在 Arduino IDE 中把 **USB CDC On Boot** 设为 **Enabled**。
+1. 给 ESP32-C3 烧录 `sketch_jul16a/sketch_jul16a.ino`，并在 Arduino IDE 中把 **USB CDC On Boot** 设为 **Enabled**。
 2. 关闭 Arduino IDE 的串口监视器。
 3. 双击 `CodexStatusLight-OneClick.exe`。
 4. 在“选择 AI 平台”中选 **Codex** 或 **Cursor**。
@@ -26,11 +26,13 @@
 | 没有运行任务，但有未点击的完成项目（项目带黄点） | 绿灯常亮 |
 | 完成项目均已点击，且没有运行或待检查项目 | 自动熄灭 |
 | 报错、断线或心跳超时 | 红灯常亮 |
+| 电脑休眠 | 全部熄灭，唤醒后恢复当前状态 |
 | 关闭显示 | 全部熄灭 |
 
 GPIO2、GPIO3、GPIO4 分别连接红、黄、绿 LED，均为高电平点亮。串口波特率为 115200。
-固件版本 4 使用 2 kHz、8 位硬件 PWM 调节三路 LED 亮度，不需要改变现有接线。亮度设置由 Windows 程序保存并在每次连接设备后恢复；“关闭显示”仍会把 LED 完全熄灭。
+固件版本 5 使用 2 kHz、8 位硬件 PWM 调节三路 LED 亮度，不需要改变现有接线。亮度设置由 Windows 程序保存并在每次连接设备后恢复；“关闭显示”仍会把 LED 完全熄灭。
 关闭显示后桥接程序仍会发送心跳，因此设备不会因心跳超时重新亮红灯。
+电脑进入休眠时，桥接程序会先让设备进入休眠态；该状态不触发心跳超时。电脑唤醒后会重新发送完整灯光状态，串口已断开时则自动重新扫描。
 
 ## Codex 与 Cursor 的区别
 
@@ -73,7 +75,7 @@ GPIO2、GPIO3、GPIO4 分别连接红、黄、绿 LED，均为高电平点亮。
 - `CodexStatusLight-OneClick.exe`：推荐，复制这一个文件即可使用。
 - `CodexStatusLight-portable.zip`：包含 EXE、安装和卸载脚本。
 - `windows/publish/CodexStatusBridge.exe`：构建输出。
-- `sketch_jul16a.ino`：ESP32-C3 固件。
+- `sketch_jul16a/sketch_jul16a.ino`：ESP32-C3 固件。
 
 界面会显示“待检查项目”数量，并提供“全部标记已检查”作为备用操作。该按钮只让状态灯忽略当前黄点，不会修改或删除 Codex/Cursor 项目。
 
@@ -99,7 +101,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\build.ps1
 
 - **一直红灯**：确认固件已上传、USB 数据线正常、串口监视器已关闭，然后点击“刷新端口”和“连接设备”。
 - **状态不变化**：点击“应用并配置”后，必须完全退出并重新打开所选平台。
-- **亮度滑块无效**：设备必须烧录签名为 `CODEX_STATUS_LIGHT:4` 的新固件；界面显示旧固件时请重新烧录本项目固件。
+- **亮度滑块无效**：设备必须烧录签名为 `CODEX_STATUS_LIGHT:4` 或更高版本的固件；界面显示旧固件时请重新烧录本项目固件。休眠自动熄灯需要版本 5。
 - **Cursor 频繁询问工具权限**：这是 Cursor 模式为了显示绿色“等待允许”闪烁而对 Shell、MCP、网页搜索和网页读取启用的行为。切回 Codex 即会移除。
 - **无法取消开机启动**：取消勾选后点击“应用并配置”。新版会同时清理注册表和旧启动文件夹项目。
 - **窗口右上角关闭后仍在运行**：这是托盘常驻设计；使用“退出程序”或托盘菜单退出。
