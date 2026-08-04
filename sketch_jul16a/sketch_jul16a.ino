@@ -10,6 +10,7 @@
  * COMPLETE   green solid
  * ERROR      red solid
  * OFF        all LEDs off
+ * SUSPEND    all LEDs off and pause heartbeat timeout until the next state command
  * BRIGHTNESS set PWM brightness from 5 to 100 percent
  * PING       refresh heartbeat without changing state
  * IDENTIFY   return device signature
@@ -38,7 +39,8 @@ enum class DeviceState : uint8_t {
   Permission,
   Complete,
   Error,
-  Off
+  Off,
+  Suspended
 };
 
 DeviceState currentState = DeviceState::Error;
@@ -96,6 +98,7 @@ void applyState(DeviceState state) {
       showSolid(RED_LED_PIN);
       break;
     case DeviceState::Off:
+    case DeviceState::Suspended:
       allLedsOff();
       break;
   }
@@ -120,7 +123,7 @@ void handleCommand(char *command) {
 
   if (strcmp(command, "IDENTIFY") == 0) {
     lastHeartbeatMs = millis();
-    Serial.println("CODEX_STATUS_LIGHT:4");
+    Serial.println("CODEX_STATUS_LIGHT:5");
   } else if (strcmp(command, "PING") == 0) {
     lastHeartbeatMs = millis();
     acknowledge("PING");
@@ -155,6 +158,10 @@ void handleCommand(char *command) {
     lastHeartbeatMs = millis();
     applyState(DeviceState::Off);
     acknowledge("OFF");
+  } else if (strcmp(command, "SUSPEND") == 0) {
+    lastHeartbeatMs = millis();
+    applyState(DeviceState::Suspended);
+    acknowledge("SUSPEND");
   } else if (strncmp(command, "BRIGHTNESS ", 11) == 0) {
     char *end = nullptr;
     const long requested = strtol(command + 11, &end, 10);
@@ -267,13 +274,15 @@ void setup() {
   runSelfTest();
   lastHeartbeatMs = millis();
   applyState(DeviceState::Error);
-  Serial.println("CODEX_STATUS_LIGHT:4");
+  Serial.println("CODEX_STATUS_LIGHT:5");
 }
 
 void loop() {
   readSerialCommands();
   const unsigned long now = millis();
-  if (currentState != DeviceState::Error && now - lastHeartbeatMs >= HEARTBEAT_TIMEOUT_MS) {
+  if (currentState != DeviceState::Error &&
+      currentState != DeviceState::Suspended &&
+      now - lastHeartbeatMs >= HEARTBEAT_TIMEOUT_MS) {
     applyState(DeviceState::Error);
     Serial.println("ERR HEARTBEAT_TIMEOUT");
   }
