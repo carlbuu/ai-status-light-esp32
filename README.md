@@ -104,6 +104,3 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\build.ps1
 
 本项目采用 [MIT License](LICENSE)。
 
-## 致谢
-
-本仓库基于 [carlbuu/ai-status-light-esp32](https://github.com/carlbuu/ai-status-light-esp32) 持续开发。感谢原项目及所有在 Git 历史中留下贡献的开发者。
