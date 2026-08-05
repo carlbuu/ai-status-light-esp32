@@ -10,6 +10,17 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      increment:
+        description: Version action
+        required: true
+        default: build-only
+        type: choice
+        options:
+          - build-only
+          - patch
+          - minor
+          - major
 
 permissions:
   contents: write
@@ -21,10 +32,65 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve software version
+        id: version
+        shell: powershell
+        run: |
+          $buildVersion = "dev"
+          $releaseTag = ""
+          $publishRelease = $false
+          $versionPattern = '^v(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)$'
+
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $releaseTag = "${{ github.ref_name }}"
+            if ($releaseTag -notmatch $versionPattern) {
+              throw "Release tag must use the vX.Y.Z format: $releaseTag"
+            }
+            $buildVersion = $releaseTag.Substring(1)
+            $publishRelease = $true
+          }
+          elseif ("${{ github.event_name }}" -eq "workflow_dispatch" -and
+                  "${{ inputs.increment }}" -ne "build-only") {
+            $versions = @(git tag --list | ForEach-Object {
+              if ($_ -match $versionPattern) {
+                [PSCustomObject]@{
+                  Tag = $_
+                  Version = [Version]("{0}.{1}.{2}" -f
+                    $Matches.major, $Matches.minor, $Matches.patch)
+                }
+              }
+            } | Sort-Object Version)
+
+            if ($versions.Count -eq 0) {
+              throw "No existing vX.Y.Z release tag was found."
+            }
+
+            $latest = $versions[-1].Version
+            $major = $latest.Major
+            $minor = $latest.Minor
+            $patch = $latest.Build
+            switch ("${{ inputs.increment }}") {
+              "patch" { $patch += 1 }
+              "minor" { $minor += 1; $patch = 0 }
+              "major" { $major += 1; $minor = 0; $patch = 0 }
+              default { throw "Unknown version increment." }
+            }
+
+            $buildVersion = "{0}.{1}.{2}" -f $major, $minor, $patch
+            $releaseTag = "v$buildVersion"
+            $publishRelease = $true
+          }
+
+          "build_version=$buildVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "release_tag=$releaseTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "publish_release=$($publishRelease.ToString().ToLowerInvariant())" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Build Windows packages
         shell: powershell
-        run: .\windows\build.ps1
+        run: .\windows\build.ps1 -Version "${{ steps.version.outputs.build_version }}"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -35,12 +101,12 @@ jobs:
             CodexStatusLight-portable.zip
 
       - name: Publish release files
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.version.outputs.publish_release == 'true'
         shell: powershell
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "${{ github.ref_name }}"
+          $tag = "${{ steps.version.outputs.release_tag }}"
 
           gh release view $tag *> $null
 
@@ -54,6 +120,7 @@ jobs:
             gh release create $tag `
               "CodexStatusLight-OneClick.exe" `
               "CodexStatusLight-portable.zip" `
-              --title "AI Status Light $tag" `
+              --target "${{ github.sha }}" `
+              --title "$tag" `
               --generate-notes
           }

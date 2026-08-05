@@ -174,8 +174,35 @@ namespace CodexStatusLight
             liveStatus.Controls.Add(statusDot);
             liveStatus.Controls.Add(heroStatus);
 
+            string productVersion = Application.ProductVersion;
+            var versionLabel = new Label
+            {
+                Text = string.Equals(productVersion, "dev", StringComparison.OrdinalIgnoreCase)
+                    ? "开发版"
+                    : "版本：v" + productVersion.TrimStart('v', 'V'),
+                Font = new Font("Microsoft YaHei UI", 8.5F),
+                ForeColor = TextMuted,
+                AutoSize = true,
+                Anchor = AnchorStyles.Right,
+                Margin = new Padding(0, 0, 0, 7)
+            };
+            var headerStatus = new TableLayoutPanel
+            {
+                AutoSize = true,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
+                ColumnCount = 1,
+                RowCount = 2,
+                Margin = new Padding(12, 20, 2, 0)
+            };
+            headerStatus.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            headerStatus.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            headerStatus.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            liveStatus.Margin = new Padding(0);
+            headerStatus.Controls.Add(versionLabel, 0, 0);
+            headerStatus.Controls.Add(liveStatus, 0, 1);
+
             panel.Controls.Add(heading, 0, 0);
-            panel.Controls.Add(liveStatus, 1, 0);
+            panel.Controls.Add(headerStatus, 1, 0);
             return panel;
         }
 
