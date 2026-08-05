@@ -1,3 +1,7 @@
+param(
+    [string]$Version = 'dev'
+)
+
 $ErrorActionPreference = 'Stop'
 
 $projectDir = Split-Path -Parent $PSScriptRoot
@@ -11,6 +15,20 @@ $oneClickFile = Join-Path $projectDir 'CodexStatusLight-OneClick.exe'
 $portableFile = Join-Path $projectDir 'CodexStatusLight-portable.zip'
 $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 
+$normalizedVersion = $Version.Trim()
+if ($normalizedVersion.StartsWith('v', [System.StringComparison]::OrdinalIgnoreCase)) {
+    $normalizedVersion = $normalizedVersion.Substring(1)
+}
+if ($normalizedVersion -eq 'dev') {
+    $assemblyVersion = '0.0.0.0'
+}
+elseif ($normalizedVersion -match '^\d+\.\d+\.\d+$') {
+    $assemblyVersion = $normalizedVersion + '.0'
+}
+else {
+    throw "Version must be 'dev' or use the X.Y.Z format: $Version"
+}
+
 if (-not (Test-Path -LiteralPath $compiler)) {
     $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe'
 }
@@ -23,6 +41,15 @@ if (-not (Test-Path -LiteralPath $iconFile)) {
 
 New-Item -ItemType Directory -Force -Path $publishDir | Out-Null
 
+$versionSourceFile = Join-Path $publishDir 'VersionInfo.g.cs'
+@"
+using System.Reflection;
+
+[assembly: AssemblyVersion("$assemblyVersion")]
+[assembly: AssemblyFileVersion("$assemblyVersion")]
+[assembly: AssemblyInformationalVersion("$normalizedVersion")]
+"@ | Set-Content -LiteralPath $versionSourceFile -Encoding UTF8
+
 & $compiler /nologo /optimize+ /target:winexe /platform:anycpu `
     /win32icon:$iconFile `
     /reference:System.dll `
@@ -33,7 +60,8 @@ New-Item -ItemType Directory -Force -Path $publishDir | Out-Null
     /out:$outputFile `
     $sourceFile `
     $uiFile `
-    $integrationFile
+    $integrationFile `
+    $versionSourceFile
 
 if ($LASTEXITCODE -ne 0) {
     throw "C# compilation failed with exit code $LASTEXITCODE."
@@ -80,3 +108,4 @@ Write-Host "One-click package: $oneClickFile"
 Write-Host "Portable package: $portableFile"
 Write-Host "Self-test: $($selfTest.Trim())"
 Write-Host "Exit self-test: $($exitSelfTest.Trim())"
+Write-Host "Software version: $normalizedVersion"
