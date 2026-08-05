@@ -1,85 +1,90 @@
-# AI 工作状态指示灯
+<p align="center">
+  <img src="assets/app-icon.png" alt="AI 工作状态指示灯图标" width="144">
+</p>
 
-这个项目把 Codex 或 Cursor 的工作状态显示到 ESP32-C3 的红、黄、绿 LED 上。Windows 端是单文件程序，界面中只能选择一个当前平台；未选中的平台不会再控制灯光。
+<h1 align="center">AI 工作状态指示灯</h1>
 
-## 最简单的使用方法
+<p align="center">
+  使用 ESP32-C3 的红、黄、绿 LED，实时显示 Codex 或 Cursor 的工作状态。
+</p>
 
-1. 给 ESP32-C3 烧录 `sketch_jul16a/sketch_jul16a.ino`，并在 Arduino IDE 中把 **USB CDC On Boot** 设为 **Enabled**。
-2. 关闭 Arduino IDE 的串口监视器。
-3. 双击 `CodexStatusLight-OneClick.exe`。
-4. 在“选择 AI 平台”中选 **Codex** 或 **Cursor**。
-5. 根据需要勾选“按运行任务数量闪烁黄灯”和“开机自动启动”，然后点击“应用并配置”。
-6. 完全退出并重新打开刚刚选择的平台。
-7. 在“灯光测试”区域拖动“亮度”滑块，可在 5%～100% 之间实时调节并自动保存。
+<p align="center">
+  <a href="https://github.com/yzy9527/ai-status-light-esp32/actions/workflows/build-release.yml"><img src="https://github.com/yzy9527/ai-status-light-esp32/actions/workflows/build-release.yml/badge.svg" alt="Build and Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
+</p>
 
-以后切换平台时，只需重新打开控制面板、选择另一个平台并点击“应用并配置”。程序会删除自身在旧平台中的 Hook，只在新平台中添加 Hook，并保留两边其他软件或用户自己的 Hook。
+Windows 桥接程序通过 Codex 或 Cursor Hooks 获取任务状态，经 USB 串口控制 ESP32-C3。界面一次只启用一个 AI 平台，避免两个平台同时控制灯光。
 
-## 灯光含义
+## 功能特性
 
-| 状态 | LED |
+- 显示工作中、等待允许、完成待查看、错误和休眠状态。
+- 可按并行任务数量让黄灯常亮、双闪或三闪。
+- 支持 5%～100% 亮度调节、自动连接、开机启动和系统托盘。
+- 支持 Codex 与 Cursor 安全切换，保留用户已有的其他 Hooks。
+- Windows 端可作为单文件程序运行，也可使用便携安装包。
+
+## 环境要求
+
+- Windows 10 或 Windows 11
+- ESP32-C3 开发板
+- 红、黄、绿 LED 各一个及相应限流电阻
+- 支持数据传输的 USB 线
+- Arduino IDE（仅烧录固件时需要）
+- Codex 或 Cursor
+
+## 下载
+
+推荐从 [GitHub Releases](https://github.com/yzy9527/ai-status-light-esp32/releases/latest) 下载：
+
+- `CodexStatusLight-OneClick.exe`：单文件图形版，适合大多数用户。
+- `CodexStatusLight-portable.zip`：包含程序及安装、卸载脚本。
+
+从源码构建的文件不会提交到 Git 仓库中。
+
+## 快速开始
+
+1. 在 Arduino IDE 中打开并烧录 [`sketch_jul16a/sketch_jul16a.ino`](sketch_jul16a/sketch_jul16a.ino)。
+2. 烧录前将 **USB CDC On Boot** 设置为 **Enabled**。
+3. 按下表接好 LED，并关闭 Arduino IDE 的串口监视器。
+4. 下载并运行 `CodexStatusLight-OneClick.exe`。
+5. 选择 Codex 或 Cursor，点击“应用并配置”。
+6. 完全退出并重新打开所选平台，使 Hooks 生效。
+7. 在“设备连接”中连接 ESP32-C3，并用“灯光测试”确认接线。
+
+| LED | ESP32-C3 引脚 | 有效电平 |
+| --- | --- | --- |
+| 红灯 | GPIO2 | 高电平 |
+| 黄灯 | GPIO3 | 高电平 |
+| 绿灯 | GPIO4 | 高电平 |
+
+每路 LED 都应串联与器件匹配的限流电阻，并与 ESP32-C3 共地。
+
+## 灯光速查
+
+| 状态 | 灯光 |
 | --- | --- |
-| 任务正在运行，未开启按数量闪烁 | 黄灯常亮 |
-| 开启按数量闪烁，1 个任务正在运行 | 黄灯常亮 |
-| 开启按数量闪烁，2 个任务正在运行 | 黄灯连续闪 2 次，然后停顿并重复 |
-| 开启按数量闪烁，3 个及以上任务正在运行 | 黄灯连续闪 3 次，然后停顿并重复 |
+| 任务运行中，任务数量动画关闭 | 黄灯常亮 |
+| 1 个任务运行中，任务数量动画开启 | 黄灯常亮 |
+| 2 个任务运行中，任务数量动画开启 | 黄灯双闪 |
+| 3 个及以上任务运行中，任务数量动画开启 | 黄灯三闪 |
 | 任一任务等待用户允许 | 绿灯闪烁 |
-| 没有运行任务，但有未点击的完成项目（项目带黄点） | 绿灯常亮 |
-| 完成项目均已点击，且没有运行或待检查项目 | 自动熄灭 |
+| 有已完成但尚未查看的项目 | 绿灯常亮 |
+| 没有运行或待查看项目 | 自动熄灭 |
 | 报错、断线或心跳超时 | 红灯常亮 |
-| 电脑休眠 | 全部熄灭，唤醒后恢复当前状态 |
-| 关闭显示 | 全部熄灭 |
+| 电脑休眠或手动关闭显示 | 全部熄灭 |
 
-GPIO2、GPIO3、GPIO4 分别连接红、黄、绿 LED，均为高电平点亮。串口波特率为 115200。
-固件版本 5 使用 2 kHz、8 位硬件 PWM 调节三路 LED 亮度，不需要改变现有接线。亮度设置由 Windows 程序保存并在每次连接设备后恢复；“关闭显示”仍会把 LED 完全熄灭。
-关闭显示后桥接程序仍会发送心跳，因此设备不会因心跳超时重新亮红灯。
-电脑进入休眠时，桥接程序会先让设备进入休眠态；该状态不触发心跳超时。电脑唤醒后会重新发送完整灯光状态，串口已断开时则自动重新扫描。
+状态优先级、平台差异和界面操作见[使用指南](docs/user-guide.md)。
 
-## Codex 与 Cursor 的区别
+## 文档
 
-### Codex
+- [安装、接线与卸载](docs/installation.md)
+- [使用指南](docs/user-guide.md)
+- [故障排查](docs/troubleshooting.md)
+- [架构与协议](docs/architecture.md)
+- [开发、构建与发布](docs/development.md)
+- [参与贡献](CONTRIBUTING.md)
 
-- 用户 Hook 文件：`%USERPROFILE%\.codex\hooks.json`
-- 程序还会监测 `%USERPROFILE%\.codex\sessions`，用于补充桌面版的开始和完成状态。
-- 会从多个 Codex 会话中统计当前运行任务数量。
-- 等待授权时显示绿灯闪烁，并优先于任务数量动画。
-- 从 `%USERPROFILE%\.codex\.codex-global-state.json` 读取带黄点的未读项目；点击项目、黄点消失后会自动熄灯（前提是没有其他运行或待检查项目）。
-
-### Cursor
-
-- 用户 Hook 文件：`%USERPROFILE%\.cursor\hooks.json`
-- 使用 Cursor 官方的会话、提示词、工具、Shell、MCP 和停止事件。
-- 支持按 Cursor 会话和任务标识统计并行任务，完成事件会立即清除对应任务。
-- 为了让“等待允许”与绿色闪烁严格同步，选择 Cursor 后，Shell、MCP、网页搜索和网页读取操作会通过 Hook 返回 `ask`，因此 Cursor 会弹出允许提示；选择回 Codex 后，这些 Hook 会自动移除。
-- Windows 上会按 UTF-8/BOM 安全解析 Cursor Hook 输入；遇到损坏的 JSON 时会恢复会话元数据，无法恢复则忽略，避免产生无法结束的虚假任务。Hook 外层直接返回权限 JSON，避免图形 EXE 丢失标准输出。
-- 从 Cursor 的 `composerHeaders.hasUnreadMessages` 读取待检查项目；点击对应项目后自动更新。
-- 如果完成时 Cursor 对话已经打开，绿灯会亮约 3 秒作为完成提示；未读项目仍会让绿灯保持常亮直到查看。
-- Cursor Hooks 官方说明：<https://cursor.com/cn/docs/hooks>
-
-## 安全切换与卸载
-
-- 当前平台、亮度和“按运行任务数量闪烁黄灯”开关保存在 `%LOCALAPPDATA%\CodexStatusLight\settings.json`。
-- 修改现有 Hook 文件前会生成带时间戳的备份。
-- 只删除命令中包含本程序 EXE 的 Hook，其他 Hook 会原样保留。
-- 便携版卸载会同时清理 Codex 和 Cursor 中属于本程序的 Hook。
-- “开机自动启动”只作用于当前 Windows 用户，可以随时在界面取消；取消时也会清理旧版本遗留的启动项。
-
-## 界面与托盘
-
-- 窗口放大时，字体、按钮和间距会同步放大。
-- 窗口变窄时，状态区和设置区会自动换行；高度不足时可以滚动。
-- 点击窗口右上角关闭会隐藏到系统托盘。
-- 真正退出请点击界面中的“退出程序”，或右键托盘图标选择“退出”。
-
-## 分发文件
-
-- `CodexStatusLight-OneClick.exe`：推荐，复制这一个文件即可使用。
-- `CodexStatusLight-portable.zip`：包含 EXE、安装和卸载脚本。
-- `windows/publish/CodexStatusBridge.exe`：构建输出。
-- `sketch_jul16a/sketch_jul16a.ino`：ESP32-C3 固件。
-
-界面会显示“待检查项目”数量，并提供“全部标记已检查”作为备用操作。该按钮只让状态灯忽略当前黄点，不会修改或删除 Codex/Cursor 项目。
-
-## 构建与自检
+## 构建
 
 在项目根目录运行：
 
@@ -87,22 +92,18 @@ GPIO2、GPIO3、GPIO4 分别连接红、黄、绿 LED，均为高电平点亮。
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\windows\build.ps1
 ```
 
-构建会生成上述三个 Windows 分发文件，并自动检查：
+脚本会编译 Windows 程序、生成两种分发包并运行内置自检。详细说明见[开发文档](docs/development.md)。
 
-- Codex/Cursor 状态事件映射
-- Windows UTF-8/BOM Hook 输入和 Cursor 权限 JSON 输出
-- 多任务数量统计、可选双闪/三闪映射和状态优先级
-- 保留无关 Hook
-- Codex 与 Cursor 双向切换
-- 窗口自适应参数
-- 串口锁被占用时仍能快速退出
+## 重要说明
 
-## 常见问题
+- 程序会修改所选平台的用户级 Hooks 配置；修改前会生成带时间戳的备份，并保留不属于本程序的 Hooks。
+- Cursor 模式为了准确显示“等待允许”，会让 Shell、MCP、网页搜索和网页读取操作弹出权限提示。切回 Codex 后会移除这些 Hooks。
+- 配置和日志保存在 `%LOCALAPPDATA%\CodexStatusLight`。
 
-- **一直红灯**：确认固件已上传、USB 数据线正常、串口监视器已关闭，然后点击“刷新端口”和“连接设备”。
-- **状态不变化**：点击“应用并配置”后，必须完全退出并重新打开所选平台。
-- **亮度滑块无效**：设备必须烧录签名为 `CODEX_STATUS_LIGHT:4` 或更高版本的固件；界面显示旧固件时请重新烧录本项目固件。休眠自动熄灯需要版本 5。
-- **Cursor 频繁询问工具权限**：这是 Cursor 模式为了显示绿色“等待允许”闪烁而对 Shell、MCP、网页搜索和网页读取启用的行为。切回 Codex 即会移除。
-- **无法取消开机启动**：取消勾选后点击“应用并配置”。新版会同时清理注册表和旧启动文件夹项目。
-- **窗口右上角关闭后仍在运行**：这是托盘常驻设计；使用“退出程序”或托盘菜单退出。
-- **查看日志**：右键托盘图标选择“打开日志”，文件位于 `%LOCALAPPDATA%\CodexStatusLight\bridge.log`。
+## 许可证
+
+本项目采用 [MIT License](LICENSE)。
+
+## 致谢
+
+本仓库基于 [carlbuu/ai-status-light-esp32](https://github.com/carlbuu/ai-status-light-esp32) 持续开发。感谢原项目及所有在 Git 历史中留下贡献的开发者。
