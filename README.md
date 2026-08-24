@@ -2,6 +2,10 @@
   <img src="assets/app-icon.png" alt="AI 工作状态指示灯图标" width="144">
 </p>
 
+<p align="center">
+  <strong>简体中文</strong> | <a href="README_EN.md">English</a>
+</p>
+
 <h1 align="center">AI 工作状态指示灯</h1>
 
 <p align="center">
@@ -9,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/yzy9527/ai-status-light-esp32/actions/workflows/build-release.yml"><img src="https://github.com/yzy9527/ai-status-light-esp32/actions/workflows/build-release.yml/badge.svg" alt="Build and Release"></a>
+  <a href="https://github.com/carlbuu/ai-status-light-esp32/actions/workflows/build-release.yml"><img src="https://github.com/carlbuu/ai-status-light-esp32/actions/workflows/build-release.yml/badge.svg" alt="Build and Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
 </p>
 
@@ -34,7 +38,7 @@ Windows 桥接程序通过 Codex 或 Cursor Hooks 获取任务状态，经 USB �
 
 ## 下载
 
-推荐从 [GitHub Releases](https://github.com/yzy9527/ai-status-light-esp32/releases/latest) 下载：
+推荐从 [GitHub Releases](https://github.com/carlbuu/ai-status-light-esp32/releases/latest) 下载：
 
 - `CodexStatusLight-OneClick.exe`：单文件图形版，适合大多数用户。
 - `CodexStatusLight-portable.zip`：包含程序及安装、卸载脚本。

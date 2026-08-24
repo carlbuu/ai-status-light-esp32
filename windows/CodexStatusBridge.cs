@@ -910,17 +910,24 @@ namespace CodexStatusLight
                     BridgeApplicationContext.DeviceCommandFor(LightState.Error, 0, false, true) != "ERROR" ||
                     BridgeApplicationContext.DeviceCommandFor(LightState.Working, 2, true, false) != "OFF")
                     throw new InvalidOperationException("Device command mapping failed.");
+                if (!BridgeApplicationContext.SupportsSuspend("5") ||
+                    BridgeApplicationContext.SupportsSuspend("4") ||
+                    BridgeApplicationContext.SupportsSuspend(null))
+                    throw new InvalidOperationException("Firmware suspend capability detection failed.");
 
-                var serialInput = new StringBuilder();
-                List<string> serialLines = BridgeApplicationContext.ExtractSerialLines(
-                    serialInput, "OK PI");
-                if (serialLines.Count != 0 || serialInput.ToString() != "OK PI")
-                    throw new InvalidOperationException("Partial serial response parsing failed.");
-                serialLines = BridgeApplicationContext.ExtractSerialLines(
-                    serialInput, "NG\r\nOK OFF\nPARTIAL");
-                if (serialLines.Count != 2 || serialLines[0] != "OK PING" ||
-                    serialLines[1] != "OK OFF" || serialInput.ToString() != "PARTIAL")
-                    throw new InvalidOperationException("Serial response framing failed.");
+                string pendingSerialResponse = "";
+                var deviceErrors = new List<string>();
+                if (BridgeApplicationContext.ParseSerialResponses(
+                        ref pendingSerialResponse, "OK PI", deviceErrors) ||
+                    !BridgeApplicationContext.ParseSerialResponses(
+                        ref pendingSerialResponse,
+                        "NG\r\nOK OFF\r\nERR TEST\r\nERR HEARTBEAT_TIMEOUT\r\n",
+                        deviceErrors) ||
+                    pendingSerialResponse.Length != 0 ||
+                    deviceErrors.Count != 2 || deviceErrors[0] != "ERR TEST" ||
+                    !BridgeApplicationContext.RequiresSerialRecovery(deviceErrors[1]) ||
+                    BridgeApplicationContext.RequiresSerialRecovery(deviceErrors[0]))
+                    throw new InvalidOperationException("Serial response parsing failed.");
                 if (IntegrationManager.NormalizeBrightness(65) != 65 ||
                     IntegrationManager.NormalizeBrightness(4) != IntegrationManager.DefaultBrightness ||
                     IntegrationManager.NormalizeBrightness(101) != IntegrationManager.DefaultBrightness)
@@ -1167,8 +1174,6 @@ namespace CodexStatusLight
 
     internal sealed class BridgeApplicationContext : ApplicationContext
     {
-        private const int MaximumSerialResponseBuffer = 1024;
-        private static readonly TimeSpan PingResponseTimeout = TimeSpan.FromSeconds(6);
         private readonly object sync = new object();
         private readonly Dictionary<string, TurnStatus> turns = new Dictionary<string, TurnStatus>();
         private readonly Dictionary<string, long> sessionOffsets = new Dictionary<string, long>();
@@ -1176,7 +1181,6 @@ namespace CodexStatusLight
         private readonly Dictionary<string, DateTime> sessionUpdatedUtc = new Dictionary<string, DateTime>();
         private readonly HashSet<string> reviewIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> acknowledgedReviewIds = ReviewAcknowledgementStore.Load();
-        private readonly StringBuilder serialResponseBuffer = new StringBuilder();
         private readonly NotifyIcon notifyIcon;
         private readonly System.Threading.Timer timer;
         private readonly System.Windows.Forms.Timer startupTimer;
@@ -1185,12 +1189,13 @@ namespace CodexStatusLight
         private SerialPort serial;
         private DateTime nextScanUtc = DateTime.MinValue;
         private DateTime nextPingUtc = DateTime.MinValue;
-        private DateTime pingResponseDeadlineUtc = DateTime.MinValue;
+        private DateTime heartbeatDeadlineUtc = DateTime.MinValue;
         private DateTime nextSessionPollUtc = DateTime.MinValue;
         private DateTime nextReviewPollUtc = DateTime.MinValue;
         private DateTime nextReviewErrorLogUtc = DateTime.MinValue;
         private DateTime recentCursorCompletionUntilUtc = DateTime.MinValue;
         private string connectedPort;
+        private string serialResponseBuffer = "";
         private string preferredPort = "AUTO";
         private string firmwareVersion = "-";
         private LightState lastLogicalState = LightState.Idle;
@@ -1201,8 +1206,6 @@ namespace CodexStatusLight
         private int brightnessPercent = IntegrationManager.DefaultBrightness;
         private bool taskCountBlinkEnabled;
         private bool systemSuspended;
-        private bool awaitingPingResponse;
-        private bool serialReconnectRequested;
         private bool powerEventsSubscribed;
         private ToolStripMenuItem displayMenuItem;
         private readonly StatusForm statusForm;
@@ -1594,29 +1597,41 @@ namespace CodexStatusLight
                         return;
                     }
 
-                    DateTime now = DateTime.UtcNow;
-                    if (serialReconnectRequested)
+                    bool serialRecoveryRequested;
+                    try
+                    {
+                        serialRecoveryRequested = DrainSerialResponses();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Write("Serial response read failed: " + ex.Message);
+                        DisconnectSerial();
+                        return;
+                    }
+
+                    if (serialRecoveryRequested)
                     {
                         Log.Write("Device requested serial state recovery on " + connectedPort + ".");
                         DisconnectSerial();
                         return;
                     }
 
-                    if (awaitingPingResponse && now >= pingResponseDeadlineUtc)
+                    if (heartbeatDeadlineUtc != DateTime.MinValue &&
+                        DateTime.UtcNow >= heartbeatDeadlineUtc)
                     {
-                        Log.Write("Serial heartbeat response timed out on " + connectedPort + ".");
+                        Log.Write("Serial heartbeat acknowledgement timed out.");
                         DisconnectSerial();
                         return;
                     }
 
-                    if (!awaitingPingResponse && now >= nextPingUtc)
+                    if (DateTime.UtcNow >= nextPingUtc)
                     {
                         try
                         {
                             serial.WriteLine("PING");
-                            awaitingPingResponse = true;
-                            pingResponseDeadlineUtc = now.Add(PingResponseTimeout);
-                            nextPingUtc = now.AddSeconds(2);
+                            if (heartbeatDeadlineUtc == DateTime.MinValue)
+                                heartbeatDeadlineUtc = DateTime.UtcNow.AddSeconds(8);
+                            nextPingUtc = DateTime.UtcNow.AddSeconds(2);
                         }
                         catch (Exception ex)
                         {
@@ -1835,79 +1850,6 @@ namespace CodexStatusLight
             return changed;
         }
 
-        internal static List<string> ExtractSerialLines(
-            StringBuilder pending,
-            string received)
-        {
-            var lines = new List<string>();
-            if (pending == null || string.IsNullOrEmpty(received))
-                return lines;
-
-            pending.Append(received);
-            int newlineIndex;
-            while ((newlineIndex = IndexOf(pending, '\n')) >= 0)
-            {
-                string line = pending.ToString(0, newlineIndex).TrimEnd('\r');
-                pending.Remove(0, newlineIndex + 1);
-                if (line.Length > 0)
-                    lines.Add(line);
-            }
-
-            if (pending.Length > MaximumSerialResponseBuffer)
-                pending.Clear();
-            return lines;
-        }
-
-        private static int IndexOf(StringBuilder value, char character)
-        {
-            for (int i = 0; i < value.Length; ++i)
-                if (value[i] == character) return i;
-            return -1;
-        }
-
-        private void OnSerialDataReceived(object sender, SerialDataReceivedEventArgs e)
-        {
-            var source = sender as SerialPort;
-            if (source == null) return;
-
-            try
-            {
-                string received = source.ReadExisting();
-                if (string.IsNullOrEmpty(received)) return;
-
-                lock (sync)
-                {
-                    if (stopping || !object.ReferenceEquals(source, serial))
-                        return;
-                    foreach (string line in ExtractSerialLines(serialResponseBuffer, received))
-                        HandleSerialResponseNoLock(line);
-                }
-            }
-            catch (ObjectDisposedException) { }
-            catch (InvalidOperationException) { }
-            catch (Exception ex)
-            {
-                if (!stopping)
-                    Log.Write("Serial receive failed: " + ex.Message);
-            }
-        }
-
-        private void HandleSerialResponseNoLock(string line)
-        {
-            if (string.Equals(line, "OK PING", StringComparison.OrdinalIgnoreCase))
-            {
-                awaitingPingResponse = false;
-                pingResponseDeadlineUtc = DateTime.MinValue;
-                return;
-            }
-
-            if (string.Equals(line, "ERR HEARTBEAT_TIMEOUT", StringComparison.OrdinalIgnoreCase))
-                serialReconnectRequested = true;
-
-            if (line.StartsWith("ERR ", StringComparison.OrdinalIgnoreCase))
-                Log.Write("Device response " + line);
-        }
-
         private void ConnectToDevice()
         {
             string[] ports = SerialPort.GetPortNames();
@@ -1972,14 +1914,11 @@ namespace CodexStatusLight
                         continue;
                     }
 
-                    candidate.DataReceived += OnSerialDataReceived;
                     serial = candidate;
                     connectedPort = portName;
                     nextPingUtc = DateTime.MinValue;
-                    awaitingPingResponse = false;
-                    serialReconnectRequested = false;
-                    pingResponseDeadlineUtc = DateTime.MinValue;
-                    serialResponseBuffer.Clear();
+                    heartbeatDeadlineUtc = DateTime.MinValue;
+                    serialResponseBuffer = "";
                     SendBrightnessNoThrow();
                     SendStateNoThrow(CalculateEffectiveStatus());
                     UpdateTray("AI 指示灯：已连接 " + portName, AppIcon.Current);
@@ -2018,6 +1957,11 @@ namespace CodexStatusLight
             if (state == LightState.Idle) return "OFF";
             if (state == LightState.Error) return "ERROR";
             return "PERMISSION";
+        }
+
+        internal static bool SupportsSuspend(string version)
+        {
+            return string.Equals(version, "5", StringComparison.Ordinal);
         }
 
         private void SendStateNoThrow(EffectiveLightStatus status)
@@ -2068,17 +2012,14 @@ namespace CodexStatusLight
         {
             if (serial != null)
             {
-                try { serial.DataReceived -= OnSerialDataReceived; } catch { }
                 try { serial.Close(); } catch { }
                 serial.Dispose();
                 serial = null;
             }
-            awaitingPingResponse = false;
-            serialReconnectRequested = false;
-            pingResponseDeadlineUtc = DateTime.MinValue;
-            serialResponseBuffer.Clear();
             connectedPort = null;
             firmwareVersion = "-";
+            heartbeatDeadlineUtc = DateTime.MinValue;
+            serialResponseBuffer = "";
             nextScanUtc = DateTime.UtcNow.AddSeconds(2);
             UpdateTray("AI 指示灯：连接已断开", SystemIcons.Warning);
         }
@@ -2149,6 +2090,7 @@ namespace CodexStatusLight
             lock (sync)
             {
                 connectionEnabled = false;
+                SendSuspendNoThrow("manual disconnect");
                 DisconnectSerial();
                 statusText = "已手动断开";
             }
@@ -2197,21 +2139,8 @@ namespace CodexStatusLight
                     if (stopping)
                         return;
                     systemSuspended = true;
-                    awaitingPingResponse = false;
-                    pingResponseDeadlineUtc = DateTime.MinValue;
                     Log.Write("System suspend detected.");
-                    if (serial == null || !serial.IsOpen || firmwareVersion != "5")
-                        return;
-                    try
-                    {
-                        serial.WriteLine("SUSPEND");
-                    }
-                    catch (Exception ex)
-                    {
-                        // Avoid a potentially slow driver close while Windows is
-                        // entering sleep. Resume handling will retry or reconnect.
-                        Log.Write("Serial suspend command failed: " + ex.Message);
-                    }
+                    SendSuspendNoThrow("system suspend");
                 }
                 return;
             }
@@ -2225,6 +2154,7 @@ namespace CodexStatusLight
                     systemSuspended = false;
                     Log.Write("System resume detected.");
                     nextPingUtc = DateTime.MinValue;
+                    heartbeatDeadlineUtc = DateTime.MinValue;
                     if (serial != null && serial.IsOpen)
                         SendStateNoThrow(CalculateEffectiveStatus());
                     else
@@ -2259,6 +2189,81 @@ namespace CodexStatusLight
                 Log.Write("Serial brightness write failed: " + ex.Message);
                 DisconnectSerial();
             }
+        }
+
+        private bool SendSuspendNoThrow(string reason)
+        {
+            if (serial == null || !serial.IsOpen || !SupportsSuspend(firmwareVersion))
+                return false;
+            try
+            {
+                serial.WriteLine("SUSPEND");
+                Log.Write("Device suspended for " + reason + ".");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                // Intentional shutdown is best effort. Unexpected connection loss
+                // must still leave the firmware heartbeat error behavior intact.
+                Log.Write("Serial suspend command failed during " + reason + ": " + ex.Message);
+                return false;
+            }
+        }
+
+        private bool DrainSerialResponses()
+        {
+            if (serial == null || !serial.IsOpen || serial.BytesToRead <= 0)
+                return false;
+
+            var deviceErrors = new List<string>();
+            bool heartbeatAcknowledged = ParseSerialResponses(
+                ref serialResponseBuffer,
+                serial.ReadExisting(),
+                deviceErrors);
+            if (heartbeatAcknowledged)
+                heartbeatDeadlineUtc = DateTime.MinValue;
+            bool recoveryRequested = false;
+            foreach (string error in deviceErrors)
+            {
+                Log.Write("Device response: " + error);
+                recoveryRequested = RequiresSerialRecovery(error) || recoveryRequested;
+            }
+            return recoveryRequested;
+        }
+
+        internal static bool RequiresSerialRecovery(string response)
+        {
+            return string.Equals(
+                response,
+                "ERR HEARTBEAT_TIMEOUT",
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal static bool ParseSerialResponses(
+            ref string pending,
+            string incoming,
+            IList<string> deviceErrors)
+        {
+            pending = (pending ?? "") + (incoming ?? "");
+            bool heartbeatAcknowledged = false;
+            int newlineIndex;
+            while ((newlineIndex = pending.IndexOf('\n')) >= 0)
+            {
+                string line = pending.Substring(0, newlineIndex).Trim();
+                pending = pending.Substring(newlineIndex + 1);
+                if (string.Equals(line, "OK PING", StringComparison.OrdinalIgnoreCase))
+                    heartbeatAcknowledged = true;
+                else if (line.StartsWith("ERR ", StringComparison.OrdinalIgnoreCase) &&
+                    deviceErrors != null)
+                    deviceErrors.Add(line);
+            }
+
+            // A valid device response is only a few dozen characters. Bound an
+            // unterminated response so a faulty device cannot grow memory forever.
+            const int MaxPendingResponseLength = 4096;
+            if (pending.Length > MaxPendingResponseLength)
+                pending = pending.Substring(pending.Length - MaxPendingResponseLength);
+            return heartbeatAcknowledged;
         }
 
         internal void SendTestCommand(string command)
@@ -2370,6 +2375,22 @@ namespace CodexStatusLight
 
             stopping = true;
             Log.Write("Bridge exit requested.");
+            try { timer.Change(Timeout.Infinite, Timeout.Infinite); } catch { }
+
+            bool lockTaken = false;
+            try
+            {
+                // Keep exit responsive if a USB driver is stuck during a scan.
+                lockTaken = Monitor.TryEnter(sync, 250);
+                if (lockTaken)
+                    SendSuspendNoThrow("application exit");
+                else
+                    Log.Write("Device suspend skipped because the serial worker was busy during exit.");
+            }
+            finally
+            {
+                if (lockTaken) Monitor.Exit(sync);
+            }
 
             if (powerEventsSubscribed)
             {
