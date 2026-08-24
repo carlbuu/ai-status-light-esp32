@@ -31,6 +31,7 @@ constexpr unsigned long TASK_FLASH_OFF_MS = 180;
 constexpr unsigned long TASK_FLASH_PAUSE_MS = 900;
 constexpr unsigned long SELF_TEST_STEP_MS = 220;
 constexpr size_t COMMAND_BUFFER_SIZE = 32;
+constexpr size_t RESPONSE_BUFFER_SIZE = 64;
 
 enum class DeviceState : uint8_t {
   WorkingOne,
@@ -104,9 +105,23 @@ void applyState(DeviceState state) {
   }
 }
 
+bool tryWriteLine(const char *line) {
+  const size_t length = strlen(line);
+  if (length + 1U > RESPONSE_BUFFER_SIZE ||
+      Serial.availableForWrite() < static_cast<int>(length + 1U)) {
+    return false;
+  }
+  Serial.write(reinterpret_cast<const uint8_t *>(line), length);
+  Serial.write('\n');
+  return true;
+}
+
 void acknowledge(const char *command) {
-  Serial.print("OK ");
-  Serial.println(command);
+  char response[RESPONSE_BUFFER_SIZE];
+  const int written = snprintf(response, sizeof(response), "OK %s", command);
+  if (written > 0 && static_cast<size_t>(written) < sizeof(response)) {
+    tryWriteLine(response);
+  }
 }
 
 void handleCommand(char *command) {
@@ -123,7 +138,7 @@ void handleCommand(char *command) {
 
   if (strcmp(command, "IDENTIFY") == 0) {
     lastHeartbeatMs = millis();
-    Serial.println("CODEX_STATUS_LIGHT:5");
+    tryWriteLine("CODEX_STATUS_LIGHT:5");
   } else if (strcmp(command, "PING") == 0) {
     lastHeartbeatMs = millis();
     acknowledge("PING");
@@ -168,7 +183,7 @@ void handleCommand(char *command) {
     while (end != nullptr && (*end == ' ' || *end == '\t')) ++end;
     if (requested < 5 || requested > 100 || end == command + 11 ||
         (end != nullptr && *end != '\0')) {
-      Serial.println("ERR BRIGHTNESS_RANGE 5-100");
+      tryWriteLine("ERR BRIGHTNESS_RANGE 5-100");
     } else {
       brightnessPercent = static_cast<uint8_t>(requested);
       lastHeartbeatMs = millis();
@@ -178,11 +193,19 @@ void handleCommand(char *command) {
     }
   } else if (strcmp(command, "BRIGHTNESS?") == 0) {
     lastHeartbeatMs = millis();
-    Serial.print("BRIGHTNESS ");
-    Serial.println(brightnessPercent);
+    char response[RESPONSE_BUFFER_SIZE];
+    const int written = snprintf(
+        response, sizeof(response), "BRIGHTNESS %u", brightnessPercent);
+    if (written > 0 && static_cast<size_t>(written) < sizeof(response)) {
+      tryWriteLine(response);
+    }
   } else if (length > 0) {
-    Serial.print("ERR UNKNOWN_COMMAND ");
-    Serial.println(command);
+    char response[RESPONSE_BUFFER_SIZE];
+    const int written = snprintf(
+        response, sizeof(response), "ERR UNKNOWN_COMMAND %s", command);
+    if (written > 0 && static_cast<size_t>(written) < sizeof(response)) {
+      tryWriteLine(response);
+    }
   }
 }
 
@@ -271,10 +294,12 @@ void setup() {
   ledcAttach(GREEN_LED_PIN, PWM_FREQUENCY, PWM_RESOLUTION_BITS);
   allLedsOff();
   Serial.begin(SERIAL_BAUD);
+#if ARDUINO_USB_CDC_ON_BOOT
+  Serial.setTxTimeoutMs(0);
+#endif
   runSelfTest();
   lastHeartbeatMs = millis();
   applyState(DeviceState::Error);
-  Serial.println("CODEX_STATUS_LIGHT:5");
 }
 
 void loop() {
@@ -284,7 +309,7 @@ void loop() {
       currentState != DeviceState::Suspended &&
       now - lastHeartbeatMs >= HEARTBEAT_TIMEOUT_MS) {
     applyState(DeviceState::Error);
-    Serial.println("ERR HEARTBEAT_TIMEOUT");
+    tryWriteLine("ERR HEARTBEAT_TIMEOUT");
   }
   updatePatterns(now);
 }
