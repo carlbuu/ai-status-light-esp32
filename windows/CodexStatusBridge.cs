@@ -501,7 +501,6 @@ namespace CodexStatusLight
         {
             HookPayload payload = ReadHookPayload(IntegrationManager.CodexPlatform);
 
-            EnsureBridgeRunning();
             var message = new HookMessage
             {
                 State = requestedState.ToUpperInvariant(),
@@ -522,7 +521,6 @@ namespace CodexStatusLight
                 return 0;
             }
             HookMessage message = CreateCursorHookMessage(payload, requestPermission);
-            EnsureBridgeRunning();
             SendMessage(message);
 
             return 0;
