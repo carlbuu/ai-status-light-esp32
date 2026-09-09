@@ -501,7 +501,6 @@ namespace CodexStatusLight
         {
             HookPayload payload = ReadHookPayload(IntegrationManager.CodexPlatform);
 
-            EnsureBridgeRunning();
             var message = new HookMessage
             {
                 State = requestedState.ToUpperInvariant(),
@@ -522,7 +521,6 @@ namespace CodexStatusLight
                 return 0;
             }
             HookMessage message = CreateCursorHookMessage(payload, requestPermission);
-            EnsureBridgeRunning();
             SendMessage(message);
 
             return 0;
@@ -659,7 +657,7 @@ namespace CodexStatusLight
             bool requestPermission)
         {
             string eventName = payload.hook_event_name ?? "";
-            string state = "WORKING";
+            string state = "IGNORE";
 
             if (requestPermission)
                 state = "WAITING";
@@ -667,6 +665,12 @@ namespace CodexStatusLight
                 state = "CLEAR_SESSION";
             else if (string.Equals(eventName, "beforeSubmitPrompt", StringComparison.OrdinalIgnoreCase))
                 state = "RESET_WORKING";
+            else if (string.Equals(eventName, "preToolUse", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(eventName, "postToolUse", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(eventName, "postToolUseFailure", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(eventName, "afterShellExecution", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(eventName, "afterMCPExecution", StringComparison.OrdinalIgnoreCase))
+                state = "PROGRESS";
             else if (string.Equals(eventName, "stop", StringComparison.OrdinalIgnoreCase))
                 state = string.Equals(payload.status, "completed", StringComparison.OrdinalIgnoreCase)
                     ? "IDLE" : "ERROR";
@@ -914,9 +918,13 @@ namespace CodexStatusLight
                 if (BridgeApplicationContext.ParseSerialResponses(
                         ref pendingSerialResponse, "OK PI", deviceErrors) ||
                     !BridgeApplicationContext.ParseSerialResponses(
-                        ref pendingSerialResponse, "NG\r\nOK OFF\r\nERR TEST\r\n", deviceErrors) ||
+                        ref pendingSerialResponse,
+                        "NG\r\nOK OFF\r\nERR TEST\r\nERR HEARTBEAT_TIMEOUT\r\n",
+                        deviceErrors) ||
                     pendingSerialResponse.Length != 0 ||
-                    deviceErrors.Count != 1 || deviceErrors[0] != "ERR TEST")
+                    deviceErrors.Count != 2 || deviceErrors[0] != "ERR TEST" ||
+                    !BridgeApplicationContext.RequiresSerialRecovery(deviceErrors[1]) ||
+                    BridgeApplicationContext.RequiresSerialRecovery(deviceErrors[0]))
                     throw new InvalidOperationException("Serial response parsing failed.");
                 if (IntegrationManager.NormalizeBrightness(65) != 65 ||
                     IntegrationManager.NormalizeBrightness(4) != IntegrationManager.DefaultBrightness ||
@@ -963,6 +971,46 @@ namespace CodexStatusLight
                     cursorMessage.State != "ERROR" ||
                     cursorMessage.SessionId != "cursor-session")
                     throw new InvalidOperationException("Cursor hook mapping failed.");
+
+                HookPayload cursorResumePayload = json.Deserialize<HookPayload>(
+                    "{\"conversation_id\":\"cursor-session\",\"generation_id\":\"cursor-next-turn\"," +
+                    "\"hook_event_name\":\"afterShellExecution\"}");
+                HookMessage cursorResumeMessage = CreateCursorHookMessage(cursorResumePayload, false);
+                if (cursorResumeMessage.State != "PROGRESS")
+                    throw new InvalidOperationException("Cursor permission resume mapping failed.");
+
+                HookPayload cursorPreToolPayload = json.Deserialize<HookPayload>(
+                    "{\"conversation_id\":\"cursor-session\",\"generation_id\":\"cursor-next-turn\"," +
+                    "\"hook_event_name\":\"preToolUse\"}");
+                if (CreateCursorHookMessage(cursorPreToolPayload, false).State != "PROGRESS")
+                    throw new InvalidOperationException("Cursor progress mapping failed.");
+
+                var cursorTurns = new Dictionary<string, TurnStatus>();
+                cursorTurns["Cursor:session-a:waiting"] = new TurnStatus
+                    { State = LightState.Waiting, LastUpdatedUtc = DateTime.UtcNow };
+                cursorTurns["Cursor:session-a:working"] = new TurnStatus
+                    { State = LightState.Working, LastUpdatedUtc = DateTime.UtcNow };
+                cursorTurns["Cursor:session-b:waiting"] = new TurnStatus
+                    { State = LightState.Waiting, LastUpdatedUtc = DateTime.UtcNow };
+                BridgeApplicationContext.RemoveWaitingTurnKeys(
+                    cursorTurns, "Cursor:session-a:");
+                if (cursorTurns.ContainsKey("Cursor:session-a:waiting") ||
+                    !cursorTurns.ContainsKey("Cursor:session-a:working") ||
+                    !cursorTurns.ContainsKey("Cursor:session-b:waiting"))
+                    throw new InvalidOperationException("Cursor waiting state cleanup failed.");
+                BridgeApplicationContext.RemoveTurnKeys(
+                    cursorTurns, "Cursor:session-a:");
+                if (cursorTurns.ContainsKey("Cursor:session-a:working") ||
+                    !cursorTurns.ContainsKey("Cursor:session-b:waiting"))
+                    throw new InvalidOperationException("Cursor completed session cleanup failed.");
+                if (BridgeApplicationContext.HasTurnKeys(
+                        cursorTurns, "Cursor:session-a:") ||
+                    !BridgeApplicationContext.HasTurnKeys(
+                        cursorTurns, "Cursor:session-b:") ||
+                    !BridgeApplicationContext.CursorStateRequiresExistingTurn("PROGRESS") ||
+                    !BridgeApplicationContext.CursorStateRequiresExistingTurn("WAITING") ||
+                    BridgeApplicationContext.CursorStateRequiresExistingTurn("RESET_WORKING"))
+                    throw new InvalidOperationException("Cursor orphan event filtering failed.");
 
                 string cursorPipeJson =
                     "{\"conversation_id\":\"光标会话\",\"generation_id\":\"并行任务\"," +
@@ -1284,6 +1332,9 @@ namespace CodexStatusLight
                 return;
             }
 
+            if (string.Equals(message.State, "IGNORE", StringComparison.OrdinalIgnoreCase))
+                return;
+
             string source = string.IsNullOrEmpty(message.Source)
                 ? IntegrationManager.CodexPlatform
                 : IntegrationManager.NormalizePlatform(message.Source);
@@ -1298,8 +1349,28 @@ namespace CodexStatusLight
             string key = sessionPrefix + (message.TurnId ?? "unknown-turn");
             lock (sync)
             {
+                bool cursorSource = string.Equals(source, IntegrationManager.CursorPlatform,
+                    StringComparison.OrdinalIgnoreCase);
+                bool cursorTurnExists = cursorSource && HasTurnKeys(turns, sessionPrefix);
+                if (cursorSource &&
+                    CursorStateRequiresExistingTurn(message.State) &&
+                    !cursorTurnExists)
+                {
+                    Log.Write("Ignored orphan Cursor hook " + message.State + " " + key);
+                    return;
+                }
+
                 if (string.Equals(message.State, "CLEAR_SESSION", StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(message.State, "RESET_WORKING", StringComparison.OrdinalIgnoreCase))
+                    RemoveTurnKeys(sessionPrefix);
+
+                if (cursorSource &&
+                    string.Equals(message.State, "PROGRESS", StringComparison.OrdinalIgnoreCase))
+                    RemoveWaitingTurnKeys(turns, sessionPrefix);
+
+                if (cursorSource &&
+                    (string.Equals(message.State, "IDLE", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(message.State, "ERROR", StringComparison.OrdinalIgnoreCase)))
                     RemoveTurnKeys(sessionPrefix);
 
                 if (string.Equals(message.State, "CLEAR_SESSION", StringComparison.OrdinalIgnoreCase))
@@ -1309,8 +1380,7 @@ namespace CodexStatusLight
                 else if (string.Equals(message.State, "IDLE", StringComparison.OrdinalIgnoreCase))
                 {
                     turns.Remove(key);
-                    if (string.Equals(source, IntegrationManager.CursorPlatform,
-                        StringComparison.OrdinalIgnoreCase))
+                    if (cursorSource)
                         recentCursorCompletionUntilUtc = DateTime.UtcNow.AddSeconds(3);
                 }
                 else
@@ -1332,12 +1402,50 @@ namespace CodexStatusLight
 
         private void RemoveTurnKeys(string prefix)
         {
+            RemoveTurnKeys(turns, prefix);
+        }
+
+        internal static void RemoveTurnKeys(
+            IDictionary<string, TurnStatus> activeTurns,
+            string prefix)
+        {
             var remove = new List<string>();
-            foreach (string key in turns.Keys)
+            foreach (string key in activeTurns.Keys)
                 if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                     remove.Add(key);
             foreach (string key in remove)
-                turns.Remove(key);
+                activeTurns.Remove(key);
+        }
+
+        internal static void RemoveWaitingTurnKeys(
+            IDictionary<string, TurnStatus> activeTurns,
+            string prefix)
+        {
+            var remove = new List<string>();
+            foreach (KeyValuePair<string, TurnStatus> pair in activeTurns)
+                if (pair.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) &&
+                    pair.Value.State == LightState.Waiting)
+                    remove.Add(pair.Key);
+            foreach (string key in remove)
+                activeTurns.Remove(key);
+        }
+
+        internal static bool HasTurnKeys(
+            IDictionary<string, TurnStatus> activeTurns,
+            string prefix)
+        {
+            foreach (string key in activeTurns.Keys)
+                if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            return false;
+        }
+
+        internal static bool CursorStateRequiresExistingTurn(string state)
+        {
+            return string.Equals(state, "PROGRESS", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(state, "WAITING", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(state, "IDLE", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(state, "ERROR", StringComparison.OrdinalIgnoreCase);
         }
 
         internal static LightState CalculateOverallState(IDictionary<string, TurnStatus> activeTurns)
@@ -1487,13 +1595,21 @@ namespace CodexStatusLight
                         return;
                     }
 
+                    bool serialRecoveryRequested;
                     try
                     {
-                        DrainSerialResponses();
+                        serialRecoveryRequested = DrainSerialResponses();
                     }
                     catch (Exception ex)
                     {
                         Log.Write("Serial response read failed: " + ex.Message);
+                        DisconnectSerial();
+                        return;
+                    }
+
+                    if (serialRecoveryRequested)
+                    {
+                        Log.Write("Device requested serial state recovery on " + connectedPort + ".");
                         DisconnectSerial();
                         return;
                     }
@@ -2092,10 +2208,10 @@ namespace CodexStatusLight
             }
         }
 
-        private void DrainSerialResponses()
+        private bool DrainSerialResponses()
         {
             if (serial == null || !serial.IsOpen || serial.BytesToRead <= 0)
-                return;
+                return false;
 
             var deviceErrors = new List<string>();
             bool heartbeatAcknowledged = ParseSerialResponses(
@@ -2104,8 +2220,21 @@ namespace CodexStatusLight
                 deviceErrors);
             if (heartbeatAcknowledged)
                 heartbeatDeadlineUtc = DateTime.MinValue;
+            bool recoveryRequested = false;
             foreach (string error in deviceErrors)
+            {
                 Log.Write("Device response: " + error);
+                recoveryRequested = RequiresSerialRecovery(error) || recoveryRequested;
+            }
+            return recoveryRequested;
+        }
+
+        internal static bool RequiresSerialRecovery(string response)
+        {
+            return string.Equals(
+                response,
+                "ERR HEARTBEAT_TIMEOUT",
+                StringComparison.OrdinalIgnoreCase);
         }
 
         internal static bool ParseSerialResponses(

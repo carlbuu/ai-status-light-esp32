@@ -89,6 +89,55 @@ if (-not $exitSelfTest.StartsWith('PASS')) {
     throw "Bridge exit self-test failed: $exitSelfTest"
 }
 
+function Assert-HookDoesNotStartBridge {
+    param(
+        [string[]]$HookArguments,
+        [string]$InputJson,
+        [string]$TestName
+    )
+
+    $hookInputFile = Join-Path $publishDir ($TestName + '-hook-input.json')
+    Set-Content -LiteralPath $hookInputFile -Value $InputJson -Encoding UTF8
+    $existingProcessIds = @(
+        Get-Process -Name 'CodexStatusBridge' -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -eq $outputFile } |
+            Select-Object -ExpandProperty Id
+    )
+
+    try {
+        $hookProcess = Start-Process -FilePath $outputFile `
+            -ArgumentList $HookArguments `
+            -RedirectStandardInput $hookInputFile `
+            -Wait `
+            -PassThru
+        if ($hookProcess.ExitCode -ne 0) {
+            throw "$TestName hook invocation failed with exit code $($hookProcess.ExitCode)."
+        }
+
+        Start-Sleep -Milliseconds 500
+        $startedProcesses = @(
+            Get-Process -Name 'CodexStatusBridge' -ErrorAction SilentlyContinue |
+                Where-Object { $_.Path -eq $outputFile -and $_.Id -notin $existingProcessIds }
+        )
+        if ($startedProcesses.Count -gt 0) {
+            $startedProcesses | Stop-Process -Force -ErrorAction SilentlyContinue
+            throw "$TestName hook unexpectedly started the background bridge."
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $hookInputFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
+Assert-HookDoesNotStartBridge `
+    -HookArguments @('hook', 'IDLE') `
+    -InputJson '{"session_id":"test-session","turn_id":"test-turn"}' `
+    -TestName 'codex'
+Assert-HookDoesNotStartBridge `
+    -HookArguments @('cursor-hook') `
+    -InputJson '{"conversation_id":"test-session","generation_id":"test-turn","hook_event_name":"stop","status":"completed"}' `
+    -TestName 'cursor'
+
 Copy-Item -LiteralPath $outputFile -Destination $oneClickFile -Force
 
 $packageStage = Join-Path $publishDir 'portable-package'
@@ -108,4 +157,5 @@ Write-Host "One-click package: $oneClickFile"
 Write-Host "Portable package: $portableFile"
 Write-Host "Self-test: $($selfTest.Trim())"
 Write-Host "Exit self-test: $($exitSelfTest.Trim())"
+Write-Host 'Hook auto-start tests: PASS'
 Write-Host "Software version: $normalizedVersion"
