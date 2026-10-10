@@ -561,8 +561,22 @@ namespace CodexStatusLight
                 int offset = inputBytes.Length >= 3 &&
                     inputBytes[0] == 0xEF && inputBytes[1] == 0xBB && inputBytes[2] == 0xBF
                     ? 3 : 0;
-                input = new UTF8Encoding(false, true).GetString(
-                    inputBytes, offset, inputBytes.Length - offset);
+                try
+                {
+                    input = new UTF8Encoding(false, true).GetString(
+                        inputBytes, offset, inputBytes.Length - offset);
+                }
+                catch (DecoderFallbackException)
+                {
+                    // Windows hook pipes can corrupt non-ASCII prompt/tool text.
+                    // Recover only event metadata; never deserialize lossy payload text.
+                    string recoveryInput = Encoding.UTF8.GetString(
+                        inputBytes, offset, inputBytes.Length - offset);
+                    HookPayload recovered = RecoverCursorHookMetadata(recoveryInput);
+                    if (!IsUsableCursorHookPayload(recovered)) throw;
+                    Log.Write("Recovered Cursor hook metadata from invalid UTF-8 input.");
+                    return recovered;
+                }
             }
 
             input = input.TrimStart('\uFEFF', '\u200B', '\0', ' ', '\t', '\r', '\n');
@@ -1035,6 +1049,44 @@ namespace CodexStatusLight
                     !IsUsableCursorHookPayload(recoveredCursorPayload) ||
                     IsUsableCursorHookPayload(new HookPayload()))
                     throw new InvalidOperationException("Malformed Cursor hook recovery failed.");
+
+                string invalidUtf8Json =
+                    "{\"conversation_id\":\"encoding-session\"," +
+                    "\"generation_id\":\"encoding-turn\",\"prompt\":\"#\"," +
+                    "\"hook_event_name\":\"beforeSubmitPrompt\"}";
+                byte[] invalidUtf8Bytes = Encoding.UTF8.GetBytes(invalidUtf8Json);
+                invalidUtf8Bytes[Array.IndexOf(invalidUtf8Bytes, (byte)'#')] = 0xBC;
+                foreach (bool includeBom in new[] { false, true })
+                {
+                    byte[] testBytes = invalidUtf8Bytes;
+                    if (includeBom)
+                    {
+                        byte[] preamble = Encoding.UTF8.GetPreamble();
+                        testBytes = new byte[preamble.Length + invalidUtf8Bytes.Length];
+                        Buffer.BlockCopy(preamble, 0, testBytes, 0, preamble.Length);
+                        Buffer.BlockCopy(invalidUtf8Bytes, 0, testBytes,
+                            preamble.Length, invalidUtf8Bytes.Length);
+                    }
+                    HookPayload encodingPayload = DeserializeCursorHookPayload(testBytes);
+                    HookMessage encodingMessage = CreateCursorHookMessage(encodingPayload, false);
+                    if (!IsUsableCursorHookPayload(encodingPayload) ||
+                        encodingMessage.SessionId != "encoding-session" ||
+                        encodingMessage.TurnId != "encoding-turn" ||
+                        encodingMessage.State != "RESET_WORKING")
+                        throw new InvalidOperationException("Invalid UTF-8 Cursor start recovery failed.");
+                }
+
+                bool invalidMetadataRejected = false;
+                try
+                {
+                    DeserializeCursorHookPayload(new byte[] { 0xBC });
+                }
+                catch (DecoderFallbackException)
+                {
+                    invalidMetadataRejected = true;
+                }
+                if (!invalidMetadataRejected)
+                    throw new InvalidOperationException("Invalid Cursor input without metadata was accepted.");
 
                 string integrationTestDir = Path.Combine(
                     Path.GetDirectoryName(outputPath),
